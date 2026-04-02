@@ -1,0 +1,9 @@
+streamlit>=1.32.0
+anthropic>=0.25.0
+requests>=2.31.0
+openmeteo-requests>=1.2.0
+requests-cache>=1.2.0
+retry-requests>=2.0.0
+pandas>=2.0.0
+pyyaml>=6.0
+python-dotenv>=1.0.0

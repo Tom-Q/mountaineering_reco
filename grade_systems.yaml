@@ -1,0 +1,28 @@
+# Grade Systems
+# This file encodes the domain knowledge used for grade filtering.
+# The goal is NOT a perfect universal mapping — it's a pragmatic one
+# that reflects real-world difficulty for an experienced alpinist.
+
+# Overall alpine grades (commitment + technical + objective hazard)
+alpine:
+  ordered: [F, PD-, PD, PD+, AD-, AD, AD+, D-, D, D+, TD-, TD, TD+, ED-, ED, ED+, ABO]
+  notes: >
+    Nominal grade is a poor proxy for actual difficulty. Conditions dominate.
+    A D in poor shape (late season, loaded couloir, degraded ridge) can be
+    harder and more committing than a TD in perfect early-season conditions.
+    Weight recency and quality of conditions reports accordingly.
+
+# French free climbing (rock)
+rock_french:
+  ordered: [3, 4a, 4b, 4c, 5a, 5b, 5c, 6a, 6a+, 6b, 6b+, 6c, 6c+, 7a, 7a+, 7b, 7b+, 7c, 7c+, 8a]
+
+# Ice / mixed
+ice_wI:
+  ordered: [WI1, WI2, WI3, WI3+, WI4, WI4+, WI5, WI5+, WI6]
+
+mixed_m:
+  ordered: [M1, M2, M3, M4, M5, M6, M7, M8]
+
+# Ski mountaineering (Traynard / Blachère scale)
+ski:
+  ordered: [S1, S2, S3, S4, S5, S6]
