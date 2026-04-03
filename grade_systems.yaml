@@ -14,7 +14,7 @@ alpine:
 
 # French free climbing (rock)
 rock_french:
-  ordered: [3, 4a, 4b, 4c, 5a, 5b, 5c, 6a, 6a+, 6b, 6b+, 6c, 6c+, 7a, 7a+, 7b, 7b+, 7c, 7c+, 8a]
+  ordered: [2, 3, 4a, 4b, 4c, 5a, 5b, 5c, 6a, 6a+, 6b, 6b+, 6c, 6c+, 7a, 7a+, 7b, 7b+, 7c, 7c+, 8a]
 
 # Ice / mixed
 ice_wI:
@@ -26,3 +26,48 @@ mixed_m:
 # Ski mountaineering (Traynard / Blachère scale)
 ski:
   ordered: [S1, S2, S3, S4, S5, S6]
+
+# Engagement (commitment / seriousness if something goes wrong)
+engagement:
+  ordered: [I, II, III, IV, V, VI]
+  labels:
+    I:   "I — retreat easy at any point"
+    II:  "II — retreat possible throughout"
+    III: "III — retreat difficult once committed"
+    IV:  "IV — retreat very difficult, rescue complicated"
+    V:   "V — very few retreat options, serious isolation"
+    VI:  "VI — retreat is itself a major undertaking"
+
+# Objective risk (avalanche, serac, rockfall, etc.)
+risk:
+  ordered: [X1, X2, X3, X4, X5]
+  labels:
+    X1: "X1 — minor objective hazard"
+    X2: "X2 — moderate objective hazard"
+    X3: "X3 — marked objective hazard"
+    X4: "X4 — severe objective hazard"
+    X5: "X5 — very severe objective hazard"
+
+# Exposition (consequence of a fall / protection spacing on rock)
+exposition:
+  ordered: [E1, E2, E3, E4, E5, E6]
+  labels:
+    E1: "E1 — over-protected"
+    E2: "E2 — well protected"
+    E3: "E3 — spaced, long fall possible"
+    E4: "E4 — fall causes injury"
+    E5: "E5 — fall causes severe accident"
+    E6: "E6 — fall likely fatal"
+
+# Equipment in place (fixed gear / bolts)
+equipment:
+  ordered: [P1, P1+, P2, P2+, P3, P3+, P4, P4+]
+  labels:
+    P1:  "P1 — sport, fully bolted"
+    P1+: "P1+ — sport, mostly bolted"
+    P2:  "P2 — trad, anchors equipped"
+    P2+: "P2+ — trad, most anchors equipped"
+    P3:  "P3 — trad, anchors often not equipped"
+    P3+: "P3+ — trad, few anchors equipped"
+    P4:  "P4 — almost nothing in place"
+    P4+: "P4+ — nothing in place"

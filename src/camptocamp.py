@@ -61,40 +61,48 @@ def latlon_bbox_to_mercator(lon_min: float, lat_min: float, lon_max: float, lat_
 # Public API
 # ---------------------------------------------------------------------------
 
-def search_routes(bbox_mercator: str, activities: list[str] | None = None, limit: int = 50) -> list[dict]:
+def search_routes(
+    bbox_mercator: str,
+    activities: list[str] | None = None,
+    offset: int = 0,
+    page_size: int = 100,
+) -> tuple[list[dict], int]:
     """
-    Search for routes within a geographic area and return lightweight stubs.
-
-    Returns route stubs — just enough to triage candidates. Use fetch_route()
-    for full details and fetch_outings() for conditions reports.
+    Fetch one page of routes sorted by quality (best-documented first).
 
     Args:
         bbox_mercator: Geographic bounds in EPSG:3857 — build with latlon_bbox_to_mercator().
         activities: Optional activity filter. Valid values: skitouring, ice_climbing,
                     rock_climbing, mountain_climbing, snow_ice_mixed, hiking, via_ferrata.
-                    If None, all activities are returned.
-        limit: Max routes per page (API cap is ~100).
+        offset: Starting index for pagination (0 = first page).
+        page_size: Number of routes to fetch (API cap is 100).
 
     Returns:
-        List of route dicts. Each has: document_id, title, title_prefix, summary,
-        activities, quality, global_rating, and discipline-specific grade fields
-        (rock_free_rating, ice_rating, mixed_rating, ski_rating, engagement_rating, etc.).
+        (routes, total) where routes is a list of route dicts and total is the
+        API-reported total matching the query (use to detect when pages are exhausted).
+        Each route dict has: document_id, title, title_prefix, summary, activities,
+        quality, global_rating, and discipline-specific grade fields.
     """
-    params: dict = {"bbox": bbox_mercator, "limit": limit}
+    params: dict = {
+        "bbox": bbox_mercator,
+        "sort": "-quality",
+        "limit": page_size,
+        "offset": offset,
+    }
     if activities:
-        params["act"] = ",".join(activities)  # "act" is Camptocamp's parameter name for activity type
+        params["act"] = ",".join(activities)
 
     data = _fetch_json("/routes", params)
     routes = data.get("documents", [])
+    total = data.get("total", 0)
 
-    # Flatten localized text fields into the top-level dict for easier downstream access
     for route in routes:
         locale = _pick_locale(route.get("locales", []))
         route["title"] = locale.get("title")
         route["title_prefix"] = locale.get("title_prefix")
         route["summary"] = locale.get("summary")
 
-    return routes
+    return routes, total
 
 
 def fetch_route(route_id: int) -> dict:

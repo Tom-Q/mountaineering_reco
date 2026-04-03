@@ -1,8 +1,15 @@
-import yaml
 import streamlit as st
 from dotenv import load_dotenv
 
 from src.camptocamp import latlon_bbox_to_mercator, search_routes
+from src.grades import (
+    rank_routes, match_colour, delta_colour, GRADE_FIELDS,
+    ROCK, ICE, MIXED, ALPINE,
+    ENGAGEMENT, ENGAGEMENT_LABELS,
+    RISK, RISK_LABELS,
+    EXPOSITION, EXPOSITION_LABELS,
+    EQUIPMENT, EQUIPMENT_LABELS,
+)
 
 load_dotenv()
 
@@ -16,57 +23,6 @@ st.title("🏔️ Mountaineering Route Recommender")
 st.caption("Suggests alpine objectives based on your history, current conditions, and weather.")
 
 
-# ---------------------------------------------------------------------------
-# Load grade scales from the single source of truth
-# ---------------------------------------------------------------------------
-@st.cache_data
-def load_grades():
-    with open("grade_systems.yaml") as f:
-        return yaml.safe_load(f)
-
-grades = load_grades()
-ROCK    = [str(g) for g in grades["rock_french"]["ordered"]]
-ICE     = grades["ice_wI"]["ordered"]
-MIXED   = grades["mixed_m"]["ordered"]
-ALPINE  = grades["alpine"]["ordered"]
-
-ENGAGEMENT = ["I", "II", "III", "IV", "V", "VI"]
-ENGAGEMENT_LABELS = {
-    "I":   "I — retreat easy at any point",
-    "II":  "II — retreat possible throughout",
-    "III": "III — retreat difficult once committed",
-    "IV":  "IV — retreat very difficult, rescue complicated",
-    "V":   "V — very few retreat options, serious isolation",
-    "VI":  "VI — retreat is itself a major undertaking",
-}
-RISK = ["X1", "X2", "X3", "X4", "X5"]
-RISK_LABELS = {
-    "X1": "X1 — minor objective hazard",
-    "X2": "X2 — moderate objective hazard",
-    "X3": "X3 — marked objective hazard",
-    "X4": "X4 — severe objective hazard",
-    "X5": "X5 — very severe objective hazard",
-}
-EXPOSITION = ["E1", "E2", "E3", "E4", "E5", "E6"]
-EXPOSITION_LABELS = {
-    "E1": "E1 — over-protected",
-    "E2": "E2 — well protected",
-    "E3": "E3 — spaced, long fall possible",
-    "E4": "E4 — fall causes injury",
-    "E5": "E5 — fall causes severe accident",
-    "E6": "E6 — fall likely fatal",
-}
-EQUIPMENT = ["P1", "P1+", "P2", "P2+", "P3", "P3+", "P4", "P4+"]
-EQUIPMENT_LABELS = {
-    "P1":  "P1 — sport, fully bolted",
-    "P1+": "P1+ — sport, mostly bolted",
-    "P2":  "P2 — trad, anchors equipped",
-    "P2+": "P2+ — trad, most anchors equipped",
-    "P3":  "P3 — trad, anchors often not equipped",
-    "P3+": "P3+ — trad, few anchors equipped",
-    "P4":  "P4 — almost nothing in place",
-    "P4+": "P4+ — nothing in place",
-}
 TIME_VALUES = [2, 3, 4, 5, 6, 8, 10, 12, 18, 24, 48, 72]
 TIME_LABELS = {2: "< 3h", 3: "3h", 4: "4h", 5: "5h", 6: "6h",
                8: "8h", 10: "10h", 12: "12h", 18: "18h", 24: "1 day",
@@ -160,23 +116,23 @@ with st.form("search_params"):
 
     submitted = st.form_submit_button("Apply", use_container_width=True)
     if submitted:
-        st.session_state["search_params"] = {
+        st.session_state["applied_params"] = {
             # Skill
             "rock_onsight":           rock_onsight,
-            "rock_redpoint":          rock_redpoint,
+            "rock_redpoint":          rock_redpoint,          # not yet used in scoring
             "rock_trad":              None if rock_trad == "N/A" else rock_trad,
             "ice_max":                None if ice_max   == "—"   else ice_max,
             "mixed_max":              None if mixed_max == "—"   else mixed_max,
             "alpine_max":             alpine_max,
-            "alpine_routes_count":    alpine_routes_count,
+            "alpine_routes_count":    alpine_routes_count,    # not yet used in scoring
             # Fitness
             "hiking_vert_max":        hiking_vert_max,
             "difficulties_vert_min":  difficulties_vert[0],
             "difficulties_vert_max":  difficulties_vert[1],
             "moving_time_min":        moving_time[0],   # hours
             "moving_time_max":        moving_time[1],
-            "pace_hiking":            pace_hiking,      # multiplier: <1 faster, >1 slower
-            "pace_technical":         pace_technical,
+            "pace_hiking":            pace_hiking,      # not yet used in scoring; multiplier: <1 faster, >1 slower
+            "pace_technical":         pace_technical,   # not yet used in scoring
             # Risk
             "engagement_max":         engagement_max,
             "risk_max":               risk_max,
@@ -185,7 +141,7 @@ with st.form("search_params"):
         }
         st.success("Parameters applied.")
 
-if "search_params" in st.session_state:
+if "applied_params" in st.session_state:
     st.caption("Parameters active ✓")
 
 st.divider()
@@ -195,12 +151,124 @@ st.divider()
 # ---------------------------------------------------------------------------
 CHAMONIX_BBOX = latlon_bbox_to_mercator(lon_min=6.6, lat_min=45.7, lon_max=7.1, lat_max=46.0)
 
-if st.button("Search routes in the Mont Blanc massif"):
-    with st.spinner("Querying Camptocamp..."):
-        routes = search_routes(CHAMONIX_BBOX, limit=5)
+_GRADE_LABEL = {
+    "rock_onsight":   "Rock (onsight)",
+    "ice_max":        "Ice",
+    "mixed_max":      "Mixed",
+    "alpine_max":     "Alpine",
+    "engagement_max": "Engagement",
+    "risk_max":       "Objective risk",
+    "exposition_max": "Exposition",
+    "equipment_min":  "Equipment",
+}
 
-    st.subheader(f"{len(routes)} routes found")
-    for route in routes:
+_ACTIVITIES = ["rock_climbing", "mountain_climbing", "ice_climbing", "snow_ice_mixed"]
+_PAGE_SIZE   = 100
+_TARGET      = 10   # stop fetching once we have this many ranked matches
+
+
+def _fetch_until_enough(params: dict) -> None:
+    """
+    Page through the Camptocamp API (quality-sorted) until we have _TARGET ranked
+    matches or there are no more results. Progress is stored in st.session_state
+    under "search" so a future "show more" button can resume from where we left off.
+
+    State schema:
+        all_fetched   list[dict]   all route stubs fetched so far
+        api_offset    int          next offset to request from the API
+        api_exhausted bool         True when the API has no more pages
+        ranked        list[dict]   all passing routes sorted by score (best first)
+        shown         int          how many results are currently displayed
+    """
+    state = st.session_state["search"]
+
+    with st.spinner("Querying Camptocamp..."):
+        while len(state["ranked"]) < _TARGET and not state["api_exhausted"]:
+            page, total = search_routes(
+                CHAMONIX_BBOX,
+                activities=_ACTIVITIES,
+                offset=state["api_offset"],
+                page_size=_PAGE_SIZE,
+            )
+            state["all_fetched"].extend(page)
+            state["api_offset"] += len(page)
+            if state["api_offset"] >= total or len(page) < _PAGE_SIZE:
+                state["api_exhausted"] = True
+
+            state["ranked"] = rank_routes(state["all_fetched"], params)
+
+
+if st.button("Search routes in the Mont Blanc massif"):
+    params = st.session_state.get("applied_params", {})
+    st.session_state["search"] = {
+        "all_fetched":   [],
+        "api_offset":    0,
+        "api_exhausted": False,
+        "ranked":        [],
+        "shown":         _TARGET,
+    }
+    if params:
+        _fetch_until_enough(params)
+
+search_state = st.session_state.get("search")
+if search_state:
+    params  = st.session_state.get("applied_params", {})
+    ranked  = search_state["ranked"]
+    shown   = search_state["shown"]
+    fetched = len(search_state["all_fetched"])
+
+    if params:
+        st.subheader(f"{len(ranked)} routes matched (of {fetched} fetched)")
+    else:
+        st.subheader(f"{fetched} routes found (apply parameters to filter & rank)")
+
+    display = ranked[:shown] if params else search_state["all_fetched"][:shown]
+
+    for route in display:
         location = route.get("title_prefix") or "Unknown location"
         name     = route.get("title")        or "Unnamed route"
-        st.write(f"**{location}** — {name}")
+        score    = route.get("_score")
+        direction = route.get("_direction")
+        warnings = route.get("_warnings", [])
+
+        route_id = route.get("document_id")
+        url = f"https://www.camptocamp.org/routes/{route_id}" if route_id else None
+        link = f"[{location} — {name}]({url})" if url else f"**{location}** — {name}"
+
+        if score is not None:
+            colour = match_colour(score, direction)
+            dot_tip = f"Overall match: score {score:.1f} ({direction}). Lower is better; 0 = perfect match."
+            dot = f'<span style="color:{colour};font-size:1.3em;" title="{dot_tip}">●</span>'
+
+            # One coloured pill per grade field that has a value on this route
+            deltas = route.get("_deltas", {})
+            pills = []
+            for sp_key, api_field, *_ in GRADE_FIELDS:
+                val = route.get(api_field)
+                if val is None:
+                    continue
+                delta   = deltas.get(sp_key)
+                colour_g = delta_colour(delta)
+                label   = _GRADE_LABEL.get(sp_key, sp_key)
+                limit   = params.get(sp_key) or "—"
+                if delta is None:
+                    tip = f"{label}: {val} (not evaluated)"
+                elif delta == 0:
+                    tip = f"{label}: {val} — matches your limit ({limit})"
+                elif delta > 0:
+                    tip = f"{label}: {val} — {delta} step(s) above your limit ({limit})"
+                else:
+                    tip = f"{label}: {val} — {abs(delta)} step(s) below your limit ({limit})"
+                pills.append(f'<span style="color:{colour_g}" title="{tip}">{val}</span>')
+            grades_html = " &nbsp; ".join(pills)
+
+            if warnings:
+                warn_tip = "&#10;".join(warnings)  # newline between each warning
+                warn = f' <span title="{warn_tip}">⚠️</span>'
+            else:
+                warn = ""
+
+            st.markdown(f"{dot} {link} &nbsp; <small>{grades_html}{warn}</small>",
+                        unsafe_allow_html=True)
+        else:
+            st.markdown(link)
