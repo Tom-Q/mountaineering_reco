@@ -1,7 +1,7 @@
 import streamlit as st
 from dotenv import load_dotenv
 
-from src.camptocamp import latlon_bbox_to_mercator, search_routes
+from src.camptocamp import latlon_bbox_to_mercator, search_routes, fetch_route
 from src.grades import (
     rank_routes, match_colour, match_label, delta_colour, delta_label, GRADE_FIELDS,
     ROCK, ICE, MIXED, ALPINE,
@@ -21,6 +21,98 @@ st.set_page_config(
 
 st.title("🏔️ Mountaineering Route Recommender")
 st.caption("Suggests alpine objectives based on your history, current conditions, and weather.")
+
+
+CHAMONIX_BBOX = latlon_bbox_to_mercator(lon_min=6.6, lat_min=45.7, lon_max=7.1, lat_max=46.0)
+
+_GRADE_LABEL = {
+    "rock_onsight":   "Rock (onsight)",
+    "ice_max":        "Ice",
+    "mixed_max":      "Mixed",
+    "alpine_max":     "Alpine",
+    "engagement_max": "Engagement",
+    "risk_max":       "Objective risk",
+    "exposition_max": "Exposition",
+    "equipment_min":  "Equipment",
+}
+
+_ACTIVITIES = ["rock_climbing", "mountain_climbing", "ice_climbing", "snow_ice_mixed"]
+_PAGE_SIZE   = 100
+_TARGET      = 5    # number of routes to display
+
+
+def _fmt_time(hours: float | None) -> str:
+    """Format a duration in hours as a compact string."""
+    if not hours or hours <= 0:
+        return "?"
+    if hours < 24:
+        h, m = divmod(int(round(hours * 60)), 60)
+        return f"{h}h{m:02d}" if m else f"{h}h"
+    return f"{int(round(hours / 24))}d"
+
+
+def _eligible_routes() -> list[dict]:
+    """all_fetched minus routes the user has removed."""
+    state = st.session_state["search"]
+    excluded = state.get("excluded_ids", set())
+    return [r for r in state["all_fetched"] if r.get("document_id") not in excluded]
+
+
+def _enrich_displayed() -> None:
+    """
+    Full-fetch the top _TARGET ranked routes and re-rank with the richer data.
+
+    Search stubs are missing height_diff_access (approach vert), so hiking vert
+    scoring is always 0 until enrichment runs. Enriched route IDs are tracked in
+    state["enriched_ids"] so repeated renders don't re-fetch.
+    """
+    state = st.session_state["search"]
+    to_enrich = [
+        r for r in state["ranked"][:_TARGET]
+        if r.get("document_id") not in state["enriched_ids"]
+    ]
+    if not to_enrich:
+        return
+
+    with st.spinner(f"Loading full details for {len(to_enrich)} routes..."):
+        for route in to_enrich:
+            rid = route["document_id"]
+            full = fetch_route(rid)
+            for i, r in enumerate(state["all_fetched"]):
+                if r.get("document_id") == rid:
+                    state["all_fetched"][i] = {**r, **full}
+                    break
+            state["enriched_ids"].add(rid)
+
+    state["ranked"] = rank_routes(
+        _eligible_routes(), state["params"], state["easy_penalty"]
+    )
+
+
+def _fetch_until_enough(params: dict, ep: float) -> None:
+    """
+    Page through the Camptocamp API until we have _TARGET ranked matches.
+    Progress is stored in st.session_state["search"].
+    """
+    state = st.session_state["search"]
+    state["params"]       = params
+    state["easy_penalty"] = ep
+
+    with st.spinner("Querying Camptocamp..."):
+        while len(state["ranked"]) < _TARGET and not state["api_exhausted"]:
+            page, total = search_routes(
+                CHAMONIX_BBOX,
+                activities=_ACTIVITIES,
+                offset=state["api_offset"],
+                page_size=_PAGE_SIZE,
+            )
+            state["all_fetched"].extend(page)
+            state["api_offset"] += len(page)
+            if state["api_offset"] >= total or len(page) < _PAGE_SIZE:
+                state["api_exhausted"] = True
+            state["ranked"] = rank_routes(_eligible_routes(), params, ep)
+
+    _enrich_displayed()
 
 
 TIME_VALUES = [2, 3, 4, 5, 6, 8, 10, 12, 18, 24, 48, 72]
@@ -122,101 +214,46 @@ with st.form("search_params"):
             help="Minimum fixed gear expected. Higher P = more self-reliance required.",
         )
 
-    submitted = st.form_submit_button("Apply", use_container_width=True)
-    if submitted:
-        st.session_state["applied_params"] = {
+    if st.form_submit_button("Search routes in the Mont Blanc massif", use_container_width=True):
+        params = {
             # Skill
             "rock_onsight":           rock_onsight,
-            "rock_redpoint":          rock_redpoint,          # not yet used in scoring
+            "rock_redpoint":          rock_redpoint,
             "rock_trad":              None if rock_trad == "N/A" else rock_trad,
             "ice_max":                None if ice_max   == "—"   else ice_max,
             "mixed_max":              None if mixed_max == "—"   else mixed_max,
             "alpine_max":             alpine_max,
-            "alpine_routes_count":    alpine_routes_count,    # not yet used in scoring
+            "alpine_routes_count":    alpine_routes_count,
             # Fitness
             "hiking_vert_max":        hiking_vert_max,
             "difficulties_vert_min":  difficulties_vert[0],
             "difficulties_vert_max":  difficulties_vert[1],
-            "moving_time_min":        moving_time[0],   # hours
+            "moving_time_min":        moving_time[0],
             "moving_time_max":        moving_time[1],
-            "pace_hiking":            pace_hiking,      # not yet used in scoring; multiplier: <1 faster, >1 slower
-            "pace_technical":         pace_technical,   # not yet used in scoring
+            "pace_hiking":            pace_hiking,
+            "pace_technical":         pace_technical,
             # Risk
             "engagement_max":         engagement_max,
             "risk_max":               risk_max,
             "exposition_max":         exposition_max,
             "equipment_min":          equipment_min,
         }
-        st.success("Parameters applied.")
-
-if "applied_params" in st.session_state:
-    st.caption("Parameters active ✓")
+        st.session_state["applied_params"] = params
+        st.session_state["search"] = {
+            "all_fetched":   [],
+            "api_offset":    0,
+            "api_exhausted": False,
+            "ranked":        [],
+            "shown":         _TARGET,
+            "enriched_ids":  set(),
+            "params":        params,
+            "easy_penalty":  easy_penalty,
+            "open_analyses": set(),
+            "excluded_ids":  set(),
+        }
+        _fetch_until_enough(params, easy_penalty)
 
 st.divider()
-
-# ---------------------------------------------------------------------------
-# Route search
-# ---------------------------------------------------------------------------
-CHAMONIX_BBOX = latlon_bbox_to_mercator(lon_min=6.6, lat_min=45.7, lon_max=7.1, lat_max=46.0)
-
-_GRADE_LABEL = {
-    "rock_onsight":   "Rock (onsight)",
-    "ice_max":        "Ice",
-    "mixed_max":      "Mixed",
-    "alpine_max":     "Alpine",
-    "engagement_max": "Engagement",
-    "risk_max":       "Objective risk",
-    "exposition_max": "Exposition",
-    "equipment_min":  "Equipment",
-}
-
-_ACTIVITIES = ["rock_climbing", "mountain_climbing", "ice_climbing", "snow_ice_mixed"]
-_PAGE_SIZE   = 100
-_TARGET      = 10   # stop fetching once we have this many ranked matches
-
-
-def _fetch_until_enough(params: dict) -> None:
-    """
-    Page through the Camptocamp API (quality-sorted) until we have _TARGET ranked
-    matches or there are no more results. Progress is stored in st.session_state
-    under "search" so a future "show more" button can resume from where we left off.
-
-    State schema:
-        all_fetched   list[dict]   all route stubs fetched so far
-        api_offset    int          next offset to request from the API
-        api_exhausted bool         True when the API has no more pages
-        ranked        list[dict]   all passing routes sorted by score (best first)
-        shown         int          how many results are currently displayed
-    """
-    state = st.session_state["search"]
-
-    with st.spinner("Querying Camptocamp..."):
-        while len(state["ranked"]) < _TARGET and not state["api_exhausted"]:
-            page, total = search_routes(
-                CHAMONIX_BBOX,
-                activities=_ACTIVITIES,
-                offset=state["api_offset"],
-                page_size=_PAGE_SIZE,
-            )
-            state["all_fetched"].extend(page)
-            state["api_offset"] += len(page)
-            if state["api_offset"] >= total or len(page) < _PAGE_SIZE:
-                state["api_exhausted"] = True
-
-            state["ranked"] = rank_routes(state["all_fetched"], params, easy_penalty)
-
-
-if st.button("Search routes in the Mont Blanc massif"):
-    params = st.session_state.get("applied_params", {})
-    st.session_state["search"] = {
-        "all_fetched":   [],
-        "api_offset":    0,
-        "api_exhausted": False,
-        "ranked":        [],
-        "shown":         _TARGET,
-    }
-    if params:
-        _fetch_until_enough(params)
 
 search_state = st.session_state.get("search")
 if search_state:
@@ -226,9 +263,9 @@ if search_state:
     fetched = len(search_state["all_fetched"])
 
     if params:
-        st.subheader(f"{len(ranked)} routes matched (of {fetched} fetched)")
+        st.subheader(f"Top {min(shown, len(ranked))} routes (of {len(ranked)} matched, {fetched} fetched)")
     else:
-        st.subheader(f"{fetched} routes found (apply parameters to filter & rank)")
+        st.subheader(f"{fetched} routes found")
 
     display = ranked[:shown] if params else search_state["all_fetched"][:shown]
 
@@ -243,33 +280,102 @@ if search_state:
         url = f"https://www.camptocamp.org/routes/{route_id}" if route_id else None
         link = f"[{location} — {name}]({url})" if url else f"**{location}** — {name}"
 
-        if score is not None:
-            colour = match_colour(score, direction)
-            dot_tip = f"Score {score:.1f} — {match_label(score, direction)}. Lower is better; 0 = perfect match."
-            dot = f'<span style="color:{colour};font-size:1.3em;" title="{dot_tip}">●</span>'
+        col_main, col_analyse, col_remove = st.columns([12, 1, 1])
 
-            # One coloured pill per grade field that has a value on this route
-            deltas = route.get("_deltas", {})
-            pills = []
-            for sp_key, api_field, *_ in GRADE_FIELDS:
-                val = route.get(api_field)
-                if val is None:
-                    continue
-                delta   = deltas.get(sp_key)
-                colour_g = delta_colour(delta)
-                label   = _GRADE_LABEL.get(sp_key, sp_key)
-                limit   = params.get(sp_key) or "—"
-                tip = f"{label}: {val} — {delta_label(delta)} (your limit: {limit})"
-                pills.append(f'<span style="color:{colour_g}" title="{tip}">{val}</span>')
-            grades_html = " &nbsp; ".join(pills)
+        with col_main:
+            if score is not None:
+                colour = match_colour(score, direction)
+                dot_tip = f"Score {score:.1f} — {match_label(score, direction)}. Lower is better; 0 = perfect match."
+                dot = f'<span style="color:{colour};font-size:1.3em;" title="{dot_tip}">●</span>'
 
-            if warnings:
-                warn_tip = "&#10;".join(warnings)  # newline between each warning
-                warn = f' <span title="{warn_tip}">⚠️</span>'
+                # One coloured pill per grade field that has a value on this route
+                deltas = route.get("_deltas", {})
+                pills = []
+                for sp_key, api_field, *_ in GRADE_FIELDS:
+                    val = route.get(api_field)
+                    if val is None:
+                        continue
+                    delta    = deltas.get(sp_key)
+                    colour_g = delta_colour(delta)
+                    label    = _GRADE_LABEL.get(sp_key, sp_key)
+                    limit    = params.get(sp_key) or "—"
+                    tip = f"{label}: {val} — {delta_label(delta)} (your limit: {limit})"
+                    pills.append(f'<span style="color:{colour_g}" title="{tip}">{val}</span>')
+                grades_html = " &nbsp; ".join(pills)
+
+                # Fitness pills: time, approach vert, difficulties vert
+                fit_pills = []
+
+                duration_h = (route.get("calculated_duration") or 0) * 24
+                if duration_h > 0:
+                    raw_d = deltas.get("moving_time", 0)
+                    col_f = delta_colour(raw_d / 2)
+                    t_min = params.get("moving_time_min")
+                    t_max = params.get("moving_time_max")
+                    rng = f"{_fmt_time(t_min)}–{_fmt_time(t_max)}" if t_min and t_max else "—"
+                    tip_f = f"Moving time: {_fmt_time(duration_h)} — {delta_label(raw_d / 2)} (your range: {rng})"
+                    fit_pills.append(f'<span style="color:{col_f}" title="{tip_f}">{_fmt_time(duration_h)}</span>')
+
+                approach = route.get("height_diff_access")
+                if approach is not None:
+                    raw_a = deltas.get("hiking_vert", 0)
+                    col_f = delta_colour(raw_a / 200)
+                    v_max = params.get("hiking_vert_max")
+                    lim = f"{int(v_max)}m" if v_max else "—"
+                    tip_f = f"Approach vert: {int(approach)}m — {delta_label(raw_a / 200)} (your max: {lim})"
+                    fit_pills.append(f'<span style="color:{col_f}" title="{tip_f}">{int(approach)}m↑</span>')
+
+                diff_vert = route.get("height_diff_difficulties")
+                if diff_vert is not None:
+                    raw_v = deltas.get("difficulties_vert", 0)
+                    col_f = delta_colour(raw_v / 200)
+                    v_min = params.get("difficulties_vert_min")
+                    v_max = params.get("difficulties_vert_max")
+                    rng = f"{int(v_min)}–{int(v_max)}m" if v_min is not None and v_max is not None else "—"
+                    tip_f = f"Technical vert: {int(diff_vert)}m — {delta_label(raw_v / 200)} (your range: {rng})"
+                    fit_pills.append(f'<span style="color:{col_f}" title="{tip_f}">{int(diff_vert)}m⬦</span>')
+
+                fitness_html = (" &thinsp;·&thinsp; ".join(fit_pills)) if fit_pills else ""
+                sep = " &nbsp;|&nbsp; " if grades_html and fitness_html else ""
+
+                if warnings:
+                    warn_tip = "&#10;".join(warnings)
+                    warn = f' <span title="{warn_tip}">⚠️</span>'
+                else:
+                    warn = ""
+
+                st.markdown(
+                    f"{dot} {link} &nbsp; <small>{grades_html}{sep}{fitness_html}{warn}</small>",
+                    unsafe_allow_html=True,
+                )
             else:
-                warn = ""
+                st.markdown(link)
 
-            st.markdown(f"{dot} {link} &nbsp; <small>{grades_html}{warn}</small>",
-                        unsafe_allow_html=True)
-        else:
-            st.markdown(link)
+        with col_analyse:
+            if route_id:
+                is_open = route_id in search_state.get("open_analyses", set())
+                if st.button("Close" if is_open else "Analyse", key=f"analyse_{route_id}"):
+                    if is_open:
+                        search_state["open_analyses"].discard(route_id)
+                    else:
+                        search_state["open_analyses"].add(route_id)
+                    st.rerun()
+
+        with col_remove:
+            if route_id:
+                if st.button("✕", key=f"remove_{route_id}", help="Remove this route"):
+                    search_state["excluded_ids"].add(route_id)
+                    search_state["open_analyses"].discard(route_id)
+                    search_state["ranked"] = rank_routes(
+                        _eligible_routes(), search_state["params"], search_state["easy_penalty"]
+                    )
+                    _enrich_displayed()
+                    st.rerun()
+
+        if route_id and route_id in search_state.get("open_analyses", set()):
+            with st.container(border=True):
+                st.markdown("**Conditions assessment** *(coming soon)*")
+                locale = route.get("_locale") or {}
+                desc = locale.get("summary") or route.get("summary") or ""
+                if desc:
+                    st.caption(desc[:500])

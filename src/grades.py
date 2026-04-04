@@ -365,7 +365,7 @@ def rank_routes(routes: list[dict], params: dict,
         scored.append(route)
 
     scored.sort(key=lambda r: r["_score"])
-    return scored[:10]
+    return scored
 
 
 # ---------------------------------------------------------------------------

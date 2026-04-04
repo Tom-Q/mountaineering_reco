@@ -6,6 +6,7 @@ All geographic coordinates use EPSG:3857 (Web Mercator) for bbox queries.
 """
 
 import math
+import time
 import requests_cache
 
 BASE_URL = "https://api.camptocamp.org"
@@ -13,6 +14,9 @@ _DEFAULT_LANG = "fr"  # Covers the most Alpine routes; used in all API requests
 
 _session = requests_cache.CachedSession("c2c_cache", expire_after=3600)
 _session.headers["User-Agent"] = "mountaineering-reco-dev/0.1"
+
+_last_request_time: float = 0.0
+_MIN_REQUEST_INTERVAL = 0.25  # seconds between real (non-cached) API calls
 
 
 # ---------------------------------------------------------------------------
@@ -30,13 +34,23 @@ def _fetch_json(path: str, params: dict | None = None) -> dict:
 
     Adds the preferred-language parameter (pl=fr) automatically so that localized
     text fields — titles, descriptions, conditions — come back in French.
-    Responses are cached for 1 hour so repeated calls during development don't
-    hit the network.
+    Responses are cached for 1 hour. Real network calls are rate-limited to at
+    most one per _MIN_REQUEST_INTERVAL seconds; cache hits skip the wait.
     """
-    params = params or {}
-    params.setdefault("pl", _DEFAULT_LANG)  # pl = preferred language for localized fields
+    global _last_request_time
+    params = {**(params or {})}
+    params.setdefault("pl", _DEFAULT_LANG)
+
+    elapsed = time.time() - _last_request_time
+    if elapsed < _MIN_REQUEST_INTERVAL:
+        time.sleep(_MIN_REQUEST_INTERVAL - elapsed)
+
     response = _session.get(f"{BASE_URL}{path}", params=params)
     response.raise_for_status()
+
+    if not getattr(response, "from_cache", True):
+        _last_request_time = time.time()
+
     return response.json()
 
 
