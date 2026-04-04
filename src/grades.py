@@ -5,14 +5,20 @@ Routes from the Camptocamp API are scored against the user's search parameters.
 The LLM is not involved here — all filtering is deterministic.
 
 Scoring formula (per-route):
-    P = total over-limit deviation  (all fields; risk fields clamped ≥ 0)
-    N = total under-limit deviation (non-risk fields only)
+    P = total over-limit deviation
+    N = total under-limit deviation
     score = α × (P + N) + (1 − α) × |P − N|   with α = 0.3
 
-With α < 0.5, partial compensation is rewarded: a route that is +2 on one
-field and −2 on another scores 1.2, better than a pure +2/0 (score 2.0),
-but worse than a perfect match (0). Risk fields never benefit from a route
-being safer than the limit (their negative deltas are clamped to 0).
+Skill grades (rock, ice, mixed, alpine) contribute a single net value:
+  - If any discipline is at or above the user's limit: P += sum of all over-limit
+    deltas; below-limit disciplines are ignored (one match frees the others).
+  - If ALL disciplines are below the user's limit: N += the delta of the
+    discipline closest to the limit (smallest gap), others are ignored.
+
+Safety fields (engagement, objective risk, exposition) are scored per-field;
+negative deltas are clamped to 0 (no benefit for being safer than the limit).
+Equipment is also per-field but bidirectional (requiring less gear than expected
+IS a penalty — you must carry more yourself).
 """
 
 import re
@@ -67,11 +73,14 @@ GRADE_FIELDS = [
     ("equipment_min",   "equipment_rating",       EQUIPMENT,  False, None),
 ]
 
-# Activities that imply a grade field should be present (used for warnings)
+# Skill disciplines scored as a single net value (see module docstring).
+SKILL_GRADE_KEYS = frozenset({"rock_onsight", "ice_max", "mixed_max", "alpine_max"})
+
+# Activities that imply a grade field should be present (used for warnings).
+# Rock and ice ratings are often absent even when relevant, so we only warn
+# for the alpine global_rating which is more reliably filled in.
 _EXPECTED_GRADES = {
-    "rock_free_rating":  {"rock_climbing", "mountain_climbing"},
-    "ice_rating":        {"ice_climbing", "snow_ice_mixed"},
-    "global_rating":     {"mountain_climbing", "snow_ice_mixed"},
+    "global_rating": {"mountain_climbing", "snow_ice_mixed"},
 }
 
 # Scoring weight (α < 0.5 allows partial compensation between over/under deviations)
@@ -210,16 +219,30 @@ def is_eliminated(grade_deltas: dict[str, float], soft_deltas: dict[str, float])
 
 def _compute_score(grade_deltas: dict[str, float],
                    soft_deltas: dict[str, float],
-                   clamp_under_keys: set[str]) -> tuple[float, str]:
+                   clamp_under_keys: set[str],
+                   easy_penalty: float = 0.0) -> tuple[float, str]:
     """
     Compute (score, direction) using the asymmetric compensation formula.
 
     direction is "over" (route harder/bigger), "under" (easier/smaller), or "match".
     """
     P = 0.0  # total over-limit
-    N = 0.0  # total under-limit (risk fields contribute 0)
+    N = 0.0  # total under-limit
 
+    # Skill grades: treated as a single net contribution (see module docstring).
+    skill = {k: v for k, v in grade_deltas.items() if k in SKILL_GRADE_KEYS}
+    if skill:
+        over = [d for d in skill.values() if d > 0]
+        under = [d for d in skill.values() if d < 0]
+        if over:
+            P += sum(over)      # all over-limit disciplines accumulate
+        elif under:
+            N += easy_penalty * -max(under)   # scaled by focus slider
+
+    # Safety / equipment fields: per-field, respecting clamp_under.
     for field, delta in grade_deltas.items():
+        if field in SKILL_GRADE_KEYS:
+            continue
         eff = max(0, delta) if field in clamp_under_keys else delta
         P += max(0.0, eff)
         N += max(0.0, -eff)
@@ -258,7 +281,8 @@ def _missing_warnings(route: dict) -> list[str]:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def rank_routes(routes: list[dict], params: dict) -> list[dict]:
+def rank_routes(routes: list[dict], params: dict,
+                easy_penalty: float = 0.0) -> list[dict]:
     """
     Score, filter, and rank routes against the user's search parameters.
 
@@ -331,7 +355,8 @@ def rank_routes(routes: list[dict], params: dict) -> list[dict]:
         if is_eliminated(g_deltas, s_deltas_norm):
             continue
 
-        score, direction = _compute_score(g_deltas, s_deltas_norm, clamp_under_keys)
+        score, direction = _compute_score(g_deltas, s_deltas_norm, clamp_under_keys,
+                                           easy_penalty)
 
         route["_score"]     = score
         route["_direction"] = direction
@@ -352,27 +377,51 @@ def match_colour(score: float, direction: str) -> str:
     if direction == "match":
         return "#2ecc71"   # green
     if direction == "over":
-        if score <= 2:  return "#f1c40f"   # yellow
-        if score <= 4:  return "#e67e22"   # orange
-        return "#e74c3c"                   # red
+        if score <= 0.5:  return "#f1c40f"   # yellow
+        if score <= 1.5:  return "#e67e22"   # orange
+        return "#e74c3c"                     # red
+    # under: cool blue → violet scale
+    if score <= 1:  return "#5dade2"         # slate blue
+    if score <= 2:  return "#2e86c1"         # medium blue
+    return "#7d3c98"                         # deep violet
+
+
+def match_label(score: float, direction: str) -> str:
+    """Return a short human-readable label for a match quality."""
+    if direction == "match":
+        return "great match"
+    if direction == "over":
+        if score <= 0.5:  return "a bit too hard"
+        if score <= 1.5:  return "too hard"
+        return "much too hard"
     # under
-    if score <= 2:  return "#1abc9c"       # cyan
-    if score <= 4:  return "#3498db"       # blue
-    return "#9b59b6"                       # pink/purple
+    if score <= 1:  return "a bit too easy"
+    if score <= 2:  return "too easy"
+    return "much too easy"
 
 
 def delta_colour(delta: int | float | None) -> str:
-    """Return a CSS colour for a single grade field delta (used in per-field display).
-
-    None or 0  → green  (match / not evaluated)
-    negative   → cyan   (easier than the user's limit — route is well within range)
-    +1         → yellow (one step over)
-    +2 or more → red    (should not normally appear; eliminated routes are filtered out)
-    """
+    """Return a CSS colour for a single grade field delta (used in per-field display)."""
     if delta is None or delta == 0:
-        return "#2ecc71"   # green
-    if delta < 0:
-        return "#1abc9c"   # cyan
-    if delta <= 1:
-        return "#f1c40f"   # yellow
-    return "#e74c3c"       # red
+        return "#2ecc71"   # green — match / not evaluated
+    if delta > 0:
+        if delta <= 0.5:  return "#f1c40f"   # yellow — a bit over
+        if delta <= 1:    return "#e67e22"   # orange — over
+        return "#e74c3c"                     # red — well over (rare; normally eliminated)
+    # negative: cool blue → violet scale, mirrors match_colour
+    if delta >= -1:   return "#5dade2"       # slate blue
+    if delta >= -2:   return "#2e86c1"       # medium blue
+    return "#7d3c98"                         # deep violet
+
+
+def delta_label(delta: float | None) -> str:
+    """Return a short human-readable label for a per-field delta."""
+    if delta is None:  return "not evaluated"
+    if delta == 0:     return "at your limit"
+    if delta > 0:
+        if delta <= 0.5:  return "a bit above your limit"
+        if delta <= 1:    return "above your limit"
+        return "well above your limit"
+    if delta >= -1:    return "a bit below your limit"
+    if delta >= -2:    return "below your limit"
+    return "well below your limit"

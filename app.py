@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 
 from src.camptocamp import latlon_bbox_to_mercator, search_routes
 from src.grades import (
-    rank_routes, match_colour, delta_colour, GRADE_FIELDS,
+    rank_routes, match_colour, match_label, delta_colour, delta_label, GRADE_FIELDS,
     ROCK, ICE, MIXED, ALPINE,
     ENGAGEMENT, ENGAGEMENT_LABELS,
     RISK, RISK_LABELS,
@@ -54,6 +54,14 @@ with st.form("search_params"):
         alpine_max = s3.selectbox("Alpine", ALPINE,        index=ALPINE.index("TD+"),
             help="Hardest overall alpine grade completed in reasonable conditions.")
         alpine_routes_count = st.selectbox("Alpine routes done", ["<5", "5–20", "20–50", "50+"], index=1)
+        easy_penalty = st.slider(
+            "Penalise routes below my limit",
+            min_value=0.0, max_value=1.0, value=0.0, step=0.25,
+            format="%.2f",
+            help="Does not affect routes that are too hard. "
+                 "Off: easy routes rank the same as routes at your limit. "
+                 "On: routes well below your limit are pushed down in results.",
+        )
 
     # --- Fitness ---------------------------------------------------------
     with c_fitness:
@@ -195,7 +203,7 @@ def _fetch_until_enough(params: dict) -> None:
             if state["api_offset"] >= total or len(page) < _PAGE_SIZE:
                 state["api_exhausted"] = True
 
-            state["ranked"] = rank_routes(state["all_fetched"], params)
+            state["ranked"] = rank_routes(state["all_fetched"], params, easy_penalty)
 
 
 if st.button("Search routes in the Mont Blanc massif"):
@@ -237,7 +245,7 @@ if search_state:
 
         if score is not None:
             colour = match_colour(score, direction)
-            dot_tip = f"Overall match: score {score:.1f} ({direction}). Lower is better; 0 = perfect match."
+            dot_tip = f"Score {score:.1f} — {match_label(score, direction)}. Lower is better; 0 = perfect match."
             dot = f'<span style="color:{colour};font-size:1.3em;" title="{dot_tip}">●</span>'
 
             # One coloured pill per grade field that has a value on this route
@@ -251,14 +259,7 @@ if search_state:
                 colour_g = delta_colour(delta)
                 label   = _GRADE_LABEL.get(sp_key, sp_key)
                 limit   = params.get(sp_key) or "—"
-                if delta is None:
-                    tip = f"{label}: {val} (not evaluated)"
-                elif delta == 0:
-                    tip = f"{label}: {val} — matches your limit ({limit})"
-                elif delta > 0:
-                    tip = f"{label}: {val} — {delta} step(s) above your limit ({limit})"
-                else:
-                    tip = f"{label}: {val} — {abs(delta)} step(s) below your limit ({limit})"
+                tip = f"{label}: {val} — {delta_label(delta)} (your limit: {limit})"
                 pills.append(f'<span style="color:{colour_g}" title="{tip}">{val}</span>')
             grades_html = " &nbsp; ".join(pills)
 

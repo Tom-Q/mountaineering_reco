@@ -32,6 +32,10 @@ This is a Streamlit app that recommends alpine climbing routes by combining dete
 
 **Prompts (`prompts/`):** Versioned separately from application logic so prompt iterations are tracked independently. The prompt must instruct the model to flag uncertainty when conditions reports are stale (>2 weeks) or contradictory, and must inject user history in structured form rather than prose.
 
+## Git commits
+
+Do not add "Co-Authored-By: Claude" or any AI attribution to commit messages.
+
 ## LLM usage
 
 Uses the Anthropic Python SDK (`anthropic` package). API key loaded from `.env` via `python-dotenv`.
