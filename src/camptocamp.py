@@ -132,6 +132,43 @@ def fetch_route(route_id: int) -> dict:
     return data
 
 
+def fetch_outing_stubs(route_id: int, limit: int = 200) -> list[dict]:
+    """
+    Fetch outing stubs for a route without loading conditions text.
+
+    Each stub includes document_id, date_start, date_end, condition_rating,
+    activities, global_rating, elevation_max, and author. Used for building
+    the date distribution (seasonality) and selecting which outings to read
+    in full before making an LLM call.
+
+    Makes 1–2 API calls (pages of 100). Responses are cached.
+    """
+    stubs: list[dict] = []
+    page_size = 100
+    while len(stubs) < limit:
+        page = _fetch_json("/outings", {
+            "r": route_id,
+            "limit": min(page_size, limit - len(stubs)),
+            "offset": len(stubs),
+        }).get("documents", [])
+        stubs.extend(page)
+        if len(page) < page_size:
+            break
+    return stubs
+
+
+def fetch_outing_full(outing_id: int) -> dict:
+    """
+    Fetch full detail for a single outing, including conditions text.
+
+    Returns all fields plus a "_locale" key with the French locale
+    (conditions, weather, timing free-text fields).
+    """
+    outing = _fetch_json(f"/outings/{outing_id}")
+    outing["_locale"] = _pick_locale(outing.get("locales", []))
+    return outing
+
+
 def fetch_outings(route_id: int, limit: int = 10) -> list[dict]:
     """
     Fetch recent trip reports (outings) for a route, newest first.

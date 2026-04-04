@@ -1,7 +1,10 @@
 import streamlit as st
 from dotenv import load_dotenv
 
-from src.camptocamp import latlon_bbox_to_mercator, search_routes, fetch_route
+from datetime import date
+
+from src.camptocamp import latlon_bbox_to_mercator, search_routes, fetch_route, fetch_outing_stubs, fetch_outing_full
+from src.llm import analyze_route, _select_outing_ids
 from src.grades import (
     rank_routes, match_colour, match_label, delta_colour, delta_label, GRADE_FIELDS,
     ROCK, ICE, MIXED, ALPINE,
@@ -250,6 +253,7 @@ with st.form("search_params"):
             "easy_penalty":  easy_penalty,
             "open_analyses": set(),
             "excluded_ids":  set(),
+            "summaries":     {},
         }
         _fetch_until_enough(params, easy_penalty)
 
@@ -374,8 +378,19 @@ if search_state:
 
         if route_id and route_id in search_state.get("open_analyses", set()):
             with st.container(border=True):
-                st.markdown("**Conditions assessment** *(coming soon)*")
-                locale = route.get("_locale") or {}
-                desc = locale.get("summary") or route.get("summary") or ""
-                if desc:
-                    st.caption(desc[:500])
+                summaries = search_state.setdefault("summaries", {})
+                if route_id not in summaries:
+                    with st.spinner("Fetching trip reports and analysing route..."):
+                        stubs = fetch_outing_stubs(route_id, limit=200)
+                        selected_ids = _select_outing_ids(stubs, date.today())
+                        full_outings = []
+                        for oid in selected_ids:
+                            try:
+                                full_outings.append(fetch_outing_full(oid))
+                            except Exception:
+                                pass
+                        summaries[route_id] = analyze_route(
+                            route, stubs, full_outings,
+                            search_state.get("params", {}), date.today(),
+                        )
+                st.markdown(summaries[route_id])
