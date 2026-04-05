@@ -1,5 +1,8 @@
 import streamlit as st
 from dotenv import load_dotenv
+import folium
+from folium.plugins import Draw
+from streamlit_folium import st_folium
 
 from datetime import date
 
@@ -101,10 +104,11 @@ def _fetch_until_enough(params: dict, ep: float) -> None:
     state["params"]       = params
     state["easy_penalty"] = ep
 
+    bbox = st.session_state.get("bbox", CHAMONIX_BBOX)
     with st.spinner("Querying Camptocamp..."):
         while len(state["ranked"]) < _TARGET and not state["api_exhausted"]:
             page, total = search_routes(
-                CHAMONIX_BBOX,
+                bbox,
                 activities=_ACTIVITIES,
                 offset=state["api_offset"],
                 page_size=_PAGE_SIZE,
@@ -127,135 +131,173 @@ SPEED_LABELS  = {0.5: "2× faster", 0.67: "1.5× faster", 0.8: "1.2× faster",
                  1.0: "on par", 1.25: "1.25× slower", 1.5: "1.5× slower", 2.0: "2× slower"}
 
 
+if "bbox" not in st.session_state:
+    st.session_state["bbox"] = CHAMONIX_BBOX
+
 # ---------------------------------------------------------------------------
-# Search parameters form — 3-column layout across the full page width
+# Layout: search parameters form (left) + area map (right)
 # ---------------------------------------------------------------------------
-with st.form("search_params"):
-    c_skill, c_fitness, c_risk = st.columns(3)
+col_form, col_map = st.columns([3, 1])
 
-    # --- Skill -----------------------------------------------------------
-    with c_skill:
-        st.markdown("**Skill**")
-        s1, s2, s3 = st.columns(3)
-        rock_onsight  = s1.selectbox("Onsight",  ROCK, index=ROCK.index("6a+"),
-            help="Hardest sport grade you can lead first-try, no falls, no beta.")
-        rock_redpoint = s2.selectbox("Redpoint", ROCK, index=ROCK.index("6c"),
-            help="Hardest sport grade you can lead after working the moves.")
-        rock_trad     = s3.selectbox("Trad",     ["N/A"] + ROCK, index=1 + ROCK.index("6a+"),
-            help="Hardest grade you can lead on gear, first try.")
-        s1, s2, s3 = st.columns(3)
-        ice_max    = s1.selectbox("Ice",    ["—"] + ICE,   index=1 + ICE.index("WI3"))
-        mixed_max  = s2.selectbox("Mixed",  ["—"] + MIXED, index=0)
-        alpine_max = s3.selectbox("Alpine", ALPINE,        index=ALPINE.index("TD+"),
-            help="Hardest overall alpine grade completed in reasonable conditions.")
-        alpine_routes_count = st.selectbox("Alpine routes done", ["<5", "5–20", "20–50", "50+"], index=1)
-        easy_penalty = st.slider(
-            "Penalise routes below my limit",
-            min_value=0.0, max_value=1.0, value=0.0, step=0.25,
-            format="%.2f",
-            help="Does not affect routes that are too hard. "
-                 "Off: easy routes rank the same as routes at your limit. "
-                 "On: routes well below your limit are pushed down in results.",
-        )
+with col_form:
+    with st.form("search_params", border=False):
+        c_skill, c_fitness, c_risk = st.columns(3)
 
-    # --- Fitness ---------------------------------------------------------
-    with c_fitness:
-        st.markdown("**Fitness**")
-        hiking_vert_max = st.number_input(
-            "Max approach/descent vert (m)",
-            min_value=0, max_value=4000, value=1500, step=100,
-            help="Non-technical terrain only (approach + descent).",
-        )
-        difficulties_vert = st.slider(
-            "Technical vert (min – max, m)",
-            min_value=0, max_value=1500, value=(100, 600), step=50,
-            help="Vertical extent of sustained technical difficulties.",
-        )
-        moving_time = st.select_slider(
-            "Moving time (min – max)",
-            options=TIME_VALUES, value=(3, 12),
-            format_func=lambda v: TIME_LABELS[v],
-            help="Total moving time on the route.",
-        )
-        pace_hiking = st.select_slider(
-            "Hiking & glacier pace (vs. Camptocamp estimates)",
-            options=SPEED_OPTIONS, value=1.0,
-            format_func=lambda v: SPEED_LABELS[v],
-        )
-        pace_technical = st.select_slider(
-            "Rock & ice pace (vs. Camptocamp estimates)",
-            options=SPEED_OPTIONS, value=1.0,
-            format_func=lambda v: SPEED_LABELS[v],
-        )
+        # --- Skill -----------------------------------------------------------
+        with c_skill:
+            st.markdown("**Skill**")
+            s1, s2, s3 = st.columns(3)
+            rock_onsight  = s1.selectbox("Onsight",  ROCK, index=ROCK.index("6a+"),
+                help="Hardest sport grade you can lead first-try, no falls, no beta.")
+            rock_redpoint = s2.selectbox("Redpoint", ROCK, index=ROCK.index("6c"),
+                help="Hardest sport grade you can lead after working the moves.")
+            rock_trad     = s3.selectbox("Trad",     ["N/A"] + ROCK, index=1 + ROCK.index("6a+"),
+                help="Hardest grade you can lead on gear, first try.")
+            s1, s2, s3 = st.columns(3)
+            ice_max    = s1.selectbox("Ice",    ["—"] + ICE,   index=1 + ICE.index("WI3"))
+            mixed_max  = s2.selectbox("Mixed",  ["—"] + MIXED, index=0)
+            alpine_max = s3.selectbox("Alpine", ALPINE,        index=ALPINE.index("TD+"),
+                help="Hardest overall alpine grade completed in reasonable conditions.")
+            alpine_routes_count = st.selectbox("Alpine routes done", ["<5", "5–20", "20–50", "50+"], index=1)
+            easy_penalty = st.slider(
+                "Penalise routes below my limit",
+                min_value=0.0, max_value=1.0, value=0.0, step=0.25,
+                format="%.2f",
+                help="Does not affect routes that are too hard. "
+                     "Off: easy routes rank the same as routes at your limit. "
+                     "On: routes well below your limit are pushed down in results.",
+            )
 
-    # --- Risk ------------------------------------------------------------
-    with c_risk:
-        st.markdown("**Risk**")
-        engagement_max = st.selectbox(
-            "Max engagement",
-            ENGAGEMENT, index=ENGAGEMENT.index("III"),
-            format_func=lambda g: ENGAGEMENT_LABELS[g],
-            help="How serious it would be to have a problem or accident: "
-                 "retreat difficulty, isolation, route length, and descent complexity all factor in.",
-        )
-        risk_max = st.selectbox(
-            "Max objective risk",
-            RISK, index=RISK.index("X2"),
-            format_func=lambda v: RISK_LABELS[v],
-            help="Avalanche, serac, rockfall, etc.",
-        )
-        exposition_max = st.selectbox(
-            "Max exposition",
-            EXPOSITION, index=EXPOSITION.index("E3"),
-            format_func=lambda v: EXPOSITION_LABELS[v],
-            help="Consequence of a fall / protection spacing on rock.",
-        )
-        equipment_min = st.selectbox(
-            "Min equipment in place",
-            EQUIPMENT, index=EQUIPMENT.index("P3+"),
-            format_func=lambda v: EQUIPMENT_LABELS[v],
-            help="Minimum fixed gear expected. Higher P = more self-reliance required.",
-        )
+        # --- Fitness ---------------------------------------------------------
+        with c_fitness:
+            st.markdown("**Fitness**")
+            hiking_vert_max = st.number_input(
+                "Max approach/descent vert (m)",
+                min_value=0, max_value=4000, value=1500, step=100,
+                help="Non-technical terrain only (approach + descent).",
+            )
+            difficulties_vert = st.slider(
+                "Technical vert (min – max, m)",
+                min_value=0, max_value=1500, value=(100, 600), step=50,
+                help="Vertical extent of sustained technical difficulties.",
+            )
+            moving_time = st.select_slider(
+                "Moving time (min – max)",
+                options=TIME_VALUES, value=(3, 12),
+                format_func=lambda v: TIME_LABELS[v],
+                help="Total moving time on the route.",
+            )
+            pace = st.select_slider(
+                "Pace vs. C2C estimates",
+                options=SPEED_OPTIONS, value=1.0,
+                format_func=lambda v: SPEED_LABELS[v],
+                help="Your speed relative to Camptocamp's time estimates. Applied to the displayed moving time and used for scoring.",
+            )
 
-    if st.form_submit_button("Search routes in the Mont Blanc massif", use_container_width=True):
-        params = {
-            # Skill
-            "rock_onsight":           rock_onsight,
-            "rock_redpoint":          rock_redpoint,
-            "rock_trad":              None if rock_trad == "N/A" else rock_trad,
-            "ice_max":                None if ice_max   == "—"   else ice_max,
-            "mixed_max":              None if mixed_max == "—"   else mixed_max,
-            "alpine_max":             alpine_max,
-            "alpine_routes_count":    alpine_routes_count,
-            # Fitness
-            "hiking_vert_max":        hiking_vert_max,
-            "difficulties_vert_min":  difficulties_vert[0],
-            "difficulties_vert_max":  difficulties_vert[1],
-            "moving_time_min":        moving_time[0],
-            "moving_time_max":        moving_time[1],
-            "pace_hiking":            pace_hiking,
-            "pace_technical":         pace_technical,
-            # Risk
-            "engagement_max":         engagement_max,
-            "risk_max":               risk_max,
-            "exposition_max":         exposition_max,
-            "equipment_min":          equipment_min,
-        }
-        st.session_state["applied_params"] = params
-        st.session_state["search"] = {
-            "all_fetched":   [],
-            "api_offset":    0,
-            "api_exhausted": False,
-            "ranked":        [],
-            "shown":         _TARGET,
-            "enriched_ids":  set(),
-            "params":        params,
-            "easy_penalty":  easy_penalty,
-            "open_analyses": set(),
-            "excluded_ids":  set(),
-            "summaries":     {},
-        }
-        _fetch_until_enough(params, easy_penalty)
+        # --- Risk ------------------------------------------------------------
+        with c_risk:
+            st.markdown("**Risk**")
+            engagement_max = st.selectbox(
+                "Max engagement",
+                ENGAGEMENT, index=ENGAGEMENT.index("III"),
+                format_func=lambda g: ENGAGEMENT_LABELS[g],
+                help="How serious it would be to have a problem or accident: "
+                     "retreat difficulty, isolation, route length, and descent complexity all factor in.",
+            )
+            risk_max = st.selectbox(
+                "Max objective risk",
+                RISK, index=RISK.index("X2"),
+                format_func=lambda v: RISK_LABELS[v],
+                help="Avalanche, serac, rockfall, etc.",
+            )
+            exposition_max = st.selectbox(
+                "Max exposition",
+                EXPOSITION, index=EXPOSITION.index("E3"),
+                format_func=lambda v: EXPOSITION_LABELS[v],
+                help="Consequence of a fall / protection spacing on rock.",
+            )
+            equipment_min = st.selectbox(
+                "Min equipment in place",
+                EQUIPMENT, index=EQUIPMENT.index("P3+"),
+                format_func=lambda v: EQUIPMENT_LABELS[v],
+                help="Minimum fixed gear expected. Higher P = more self-reliance required.",
+            )
+
+        if st.form_submit_button("Search routes in selected area", use_container_width=True):
+            params = {
+                # Skill
+                "rock_onsight":           rock_onsight,
+                "rock_redpoint":          rock_redpoint,
+                "rock_trad":              None if rock_trad == "N/A" else rock_trad,
+                "ice_max":                None if ice_max   == "—"   else ice_max,
+                "mixed_max":              None if mixed_max == "—"   else mixed_max,
+                "alpine_max":             alpine_max,
+                "alpine_routes_count":    alpine_routes_count,
+                # Fitness
+                "hiking_vert_max":        hiking_vert_max,
+                "difficulties_vert_min":  difficulties_vert[0],
+                "difficulties_vert_max":  difficulties_vert[1],
+                "moving_time_min":        moving_time[0],
+                "moving_time_max":        moving_time[1],
+                "pace":                   pace,
+                # Risk
+                "engagement_max":         engagement_max,
+                "risk_max":               risk_max,
+                "exposition_max":         exposition_max,
+                "equipment_min":          equipment_min,
+            }
+            st.session_state["applied_params"] = params
+            st.session_state["search"] = {
+                "all_fetched":   [],
+                "api_offset":    0,
+                "api_exhausted": False,
+                "ranked":        [],
+                "shown":         _TARGET,
+                "enriched_ids":  set(),
+                "params":        params,
+                "easy_penalty":  easy_penalty,
+                "open_analyses": set(),
+                "excluded_ids":  set(),
+                "summaries":     {},
+            }
+            _fetch_until_enough(params, easy_penalty)
+
+with col_map:
+    st.markdown("**Search area**")
+    st.caption("Draw a rectangle to select a search area. Default: Mont Blanc massif.")
+    _m = folium.Map(
+        location=[45.85, 6.87],
+        zoom_start=8,
+        tiles="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+        attr=(
+            'Map data: &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> contributors, '
+            '<a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; '
+            '<a href="https://opentopomap.org">OpenTopoMap</a>'
+        ),
+    )
+    Draw(
+        draw_options={
+            "rectangle": True,
+            "polyline": False, "polygon": False, "circle": False,
+            "marker": False, "circlemarker": False,
+        },
+        edit_options={"edit": False},
+    ).add_to(_m)
+    _map_result = st_folium(_m, key="area_map", use_container_width=True, height=500,
+                            returned_objects=["all_drawings"])
+    _drawings = (_map_result or {}).get("all_drawings")
+    if _drawings is not None:
+        # all_drawings is None on reruns that don't involve map interaction — don't touch bbox.
+        # It's [] when the user deleted their drawing, and a list of shapes when they drew one.
+        if _drawings:
+            _coords = _drawings[-1]["geometry"]["coordinates"][0]
+            _lons = [c[0] for c in _coords]
+            _lats = [c[1] for c in _coords]
+            st.session_state["bbox"] = latlon_bbox_to_mercator(
+                min(_lons), min(_lats), max(_lons), max(_lats)
+            )
+        else:
+            st.session_state["bbox"] = CHAMONIX_BBOX
 
 st.divider()
 
@@ -312,32 +354,31 @@ if search_state:
 
                 duration_h = (route.get("calculated_duration") or 0) * 24
                 if duration_h > 0:
-                    raw_d = deltas.get("moving_time", 0)
-                    col_f = delta_colour(raw_d / 2)
+                    pace = params.get("pace", 1.0)
+                    adjusted_h = duration_h * pace
+                    d_time = deltas.get("moving_time", 0)
                     t_min = params.get("moving_time_min")
                     t_max = params.get("moving_time_max")
                     rng = f"{_fmt_time(t_min)}–{_fmt_time(t_max)}" if t_min and t_max else "—"
-                    tip_f = f"Moving time: {_fmt_time(duration_h)} — {delta_label(raw_d / 2)} (your range: {rng})"
-                    fit_pills.append(f'<span style="color:{col_f}" title="{tip_f}">{_fmt_time(duration_h)}</span>')
+                    tip_f = f"Moving time: {_fmt_time(adjusted_h)} — {delta_label(d_time)} (your range: {rng})"
+                    fit_pills.append(f'<span style="color:{delta_colour(d_time)}" title="{tip_f}">{_fmt_time(adjusted_h)}</span>')
 
                 approach = route.get("height_diff_access")
                 if approach is not None:
-                    raw_a = deltas.get("hiking_vert", 0)
-                    col_f = delta_colour(raw_a / 200)
+                    d_vert = deltas.get("hiking_vert", 0)
                     v_max = params.get("hiking_vert_max")
                     lim = f"{int(v_max)}m" if v_max else "—"
-                    tip_f = f"Approach vert: {int(approach)}m — {delta_label(raw_a / 200)} (your max: {lim})"
-                    fit_pills.append(f'<span style="color:{col_f}" title="{tip_f}">{int(approach)}m↑</span>')
+                    tip_f = f"Approach vert: {int(approach)}m — {delta_label(d_vert)} (your max: {lim})"
+                    fit_pills.append(f'<span style="color:{delta_colour(d_vert)}" title="{tip_f}">{int(approach)}m↑</span>')
 
                 diff_vert = route.get("height_diff_difficulties")
                 if diff_vert is not None:
-                    raw_v = deltas.get("difficulties_vert", 0)
-                    col_f = delta_colour(raw_v / 200)
+                    d_diff = deltas.get("difficulties_vert", 0)
                     v_min = params.get("difficulties_vert_min")
                     v_max = params.get("difficulties_vert_max")
                     rng = f"{int(v_min)}–{int(v_max)}m" if v_min is not None and v_max is not None else "—"
-                    tip_f = f"Technical vert: {int(diff_vert)}m — {delta_label(raw_v / 200)} (your range: {rng})"
-                    fit_pills.append(f'<span style="color:{col_f}" title="{tip_f}">{int(diff_vert)}m⬦</span>')
+                    tip_f = f"Technical vert: {int(diff_vert)}m — {delta_label(d_diff)} (your range: {rng})"
+                    fit_pills.append(f'<span style="color:{delta_colour(d_diff)}" title="{tip_f}">{int(diff_vert)}m⬦</span>')
 
                 fitness_html = (" &thinsp;·&thinsp; ".join(fit_pills)) if fit_pills else ""
                 sep = " &nbsp;|&nbsp; " if grades_html and fitness_html else ""

@@ -167,34 +167,3 @@ def fetch_outing_full(outing_id: int) -> dict:
     outing = _fetch_json(f"/outings/{outing_id}")
     outing["_locale"] = _pick_locale(outing.get("locales", []))
     return outing
-
-
-def fetch_outings(route_id: int, limit: int = 10) -> list[dict]:
-    """
-    Fetch recent trip reports (outings) for a route, newest first.
-
-    Outings are the primary source of conditions information. Each outing
-    has structured fields (condition_rating, snow_quality, avalanche_signs, etc.)
-    and a "_locale" key with free-text fields (conditions, weather, timing).
-
-    Note: makes N+1 API calls — one to list stubs, then one per outing to get the
-    full detail including condition text (the list endpoint omits it). Responses
-    are cached, so this is cheap during development.
-
-    Args:
-        route_id: Camptocamp route document_id (from search_routes or fetch_route).
-        limit: Max number of outings to fetch.
-    """
-    stubs = _fetch_json("/outings", {"r": route_id, "limit": limit}).get("documents", [])
-
-    outings = []
-    for stub in stubs:
-        try:
-            outing = _fetch_json(f"/outings/{stub['document_id']}")
-            outing["_locale"] = _pick_locale(outing.get("locales", []))
-            outings.append(outing)
-        except Exception:
-            # Skip outings that fail individually (deleted document, permission issue, etc.)
-            continue
-
-    return outings

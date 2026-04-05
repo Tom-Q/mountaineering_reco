@@ -8,16 +8,18 @@ route ranking — those are handled deterministically in src/grades.py.
 
 import os
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import anthropic
-import requests
+import requests_cache
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _MODEL = "claude-haiku-4-5-20251001"
 
 _client: anthropic.Anthropic | None = None
+_topo_session = requests_cache.CachedSession("topo_cache", expire_after=3600)
+_ROUTE_ANALYSIS_PROMPT = (_PROMPTS_DIR / "route_analysis.md").read_text()
 
 # URLs containing these strings are unlikely to have useful topo text
 _SKIP_URL_PATTERNS = ["youtube.com", "youtu.be", "tvmountain", "eosya", "amazon", "fnac", "glenat"]
@@ -28,10 +30,6 @@ def _get_client() -> anthropic.Anthropic:
     if _client is None:
         _client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     return _client
-
-
-def _load_prompt(name: str) -> str:
-    return (_PROMPTS_DIR / name).read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +50,7 @@ def _fetch_topo_page(url: str) -> str | None:
     if any(pat in url for pat in _SKIP_URL_PATTERNS):
         return None
     try:
-        resp = requests.get(url, timeout=8, headers={"User-Agent": "mountaineering-reco-dev/0.1"})
+        resp = _topo_session.get(url, timeout=8, headers={"User-Agent": "mountaineering-reco-dev/0.1"})
         resp.raise_for_status()
         html = resp.text
         # Strip script / style blocks
@@ -95,7 +93,6 @@ def _select_outing_ids(stubs: list[dict], today: date) -> set[int]:
 
     # Up to 3 from same season (±30 days of today's date) in prior years,
     # preferring good/excellent ratings
-    from datetime import timedelta
     window = timedelta(days=30)
     today_no_year = today.replace(year=2000)
     seasonal = [
@@ -226,7 +223,7 @@ def analyze_route(
     response = _get_client().messages.create(
         model=_MODEL,
         max_tokens=2000,
-        system=_load_prompt("route_analysis.md"),
+        system=_ROUTE_ANALYSIS_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
     )
     return response.content[0].text.strip()

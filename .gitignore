@@ -206,3 +206,4 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 c2c_cache.sqlite
+topo_cache.sqlite

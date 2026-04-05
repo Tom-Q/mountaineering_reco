@@ -322,6 +322,8 @@ def rank_routes(routes: list[dict], params: dict,
 
         # --- Soft deltas (vert and time) ---------------------------------
         duration_h = (route.get("calculated_duration") or 0) * 24  # days → hours
+        pace = params.get("pace", 1.0)
+        adjusted_duration_h = (duration_h * pace) if duration_h > 0 else None
 
         s_deltas = {
             # height_diff_access is absent from stubs; hiking_vert is always 0 until
@@ -337,7 +339,7 @@ def rank_routes(routes: list[dict], params: dict,
                 params.get("difficulties_vert_max"),
             ),
             "moving_time": soft_delta(
-                duration_h if duration_h > 0 else None,
+                adjusted_duration_h,
                 params.get("moving_time_min"),
                 params.get("moving_time_max"),
             ),
@@ -360,7 +362,7 @@ def rank_routes(routes: list[dict], params: dict,
 
         route["_score"]     = score
         route["_direction"] = direction
-        route["_deltas"]    = {**g_deltas, **s_deltas}
+        route["_deltas"]    = {**g_deltas, **s_deltas_norm}
         route["_warnings"]  = _missing_warnings(route)
         scored.append(route)
 
