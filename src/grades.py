@@ -83,7 +83,12 @@ _EXPECTED_GRADES = {
     "global_rating": {"mountain_climbing", "snow_ice_mixed"},
 }
 
-# Scoring weight (α < 0.5 allows partial compensation between over/under deviations)
+# Scoring weight. α < 0.5 means the formula rewards partial compensation — a route
+# that is slightly hard in one dimension and slightly easy in another scores better
+# than one that is off in one direction only. α = 0 would be pure compensation
+# (only the net imbalance counts); α = 1 would be pure accumulation (no compensation).
+# 0.3 was chosen to lean toward compensation while still penalising routes that are
+# hard across multiple dimensions.
 _ALPHA = 0.3
 
 # ---------------------------------------------------------------------------

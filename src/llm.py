@@ -21,7 +21,8 @@ _client: anthropic.Anthropic | None = None
 _topo_session = requests_cache.CachedSession("topo_cache", expire_after=3600)
 _ROUTE_ANALYSIS_PROMPT = (_PROMPTS_DIR / "route_analysis.md").read_text()
 
-# URLs containing these strings are unlikely to have useful topo text
+# Skip non-text sources (videos, book purchase pages) that would return empty or
+# irrelevant content. "tvmountain" and "eosya" are video/subscription platforms.
 _SKIP_URL_PATTERNS = ["youtube.com", "youtu.be", "tvmountain", "eosya", "amazon", "fnac", "glenat"]
 
 
@@ -73,8 +74,8 @@ def _select_outing_ids(stubs: list[dict], today: date) -> set[int]:
     Choose which outings to full-fetch from a list of stubs.
 
     Selects:
-    - 5 most recent (for current conditions)
-    - Up to 5 from the same month ±1 in prior years, preferring good/excellent
+    - 2 most recent (for current conditions)
+    - Up to 3 from the same month ±30 days in prior years, preferring good/excellent
       ratings (for seasonal reference)
     """
     dated: list[tuple[dict, date]] = []
@@ -111,7 +112,7 @@ def _select_outing_ids(stubs: list[dict], today: date) -> set[int]:
 # Main analysis function
 # ---------------------------------------------------------------------------
 
-def analyze_route(
+def build_analysis_prompt(
     route: dict,
     stubs: list[dict],
     full_outings: list[dict],
@@ -119,10 +120,9 @@ def analyze_route(
     today: date,
 ) -> str:
     """
-    Return a markdown-formatted five-section route analysis.
+    Build the user message for the route analysis LLM call.
 
-    Sections: Route overview, Topo links, Seasonality, Recent conditions,
-    Relative to your level.
+    Returns the assembled prompt string. Pure function — no API calls.
     """
     locale = route.get("_locale") or {}
     name = route.get("title") or "Unknown route"
@@ -212,7 +212,7 @@ def analyze_route(
             outing_lines.append(f"Weather: {weather[:200]}")
     outing_block = "\n".join(outing_lines)
 
-    user_msg = "\n\n".join([
+    return "\n\n".join([
         f"Today's date: {today.isoformat()}",
         topo_block,
         profile_block,
@@ -220,6 +220,21 @@ def analyze_route(
         outing_block,
     ])
 
+
+def analyze_route(
+    route: dict,
+    stubs: list[dict],
+    full_outings: list[dict],
+    user_params: dict,
+    today: date,
+) -> str:
+    """
+    Return a markdown-formatted five-section route analysis.
+
+    Sections: Route overview, Topo links, Seasonality, Recent conditions,
+    Relative to your level.
+    """
+    user_msg = build_analysis_prompt(route, stubs, full_outings, user_params, today)
     response = _get_client().messages.create(
         model=_MODEL,
         max_tokens=2000,

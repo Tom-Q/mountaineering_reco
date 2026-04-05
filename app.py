@@ -6,10 +6,11 @@ from streamlit_folium import st_folium
 
 from datetime import date
 
-from src.camptocamp import latlon_bbox_to_mercator, search_routes, fetch_route, fetch_outing_stubs, fetch_outing_full
+from src.camptocamp import latlon_bbox_to_mercator, fetch_outing_stubs, fetch_outing_full, CHAMONIX_BBOX
 from src.llm import analyze_route, _select_outing_ids
+from src.search import fetch_page, enrich_routes, rerank
 from src.grades import (
-    rank_routes, match_colour, match_label, delta_colour, delta_label, GRADE_FIELDS,
+    match_colour, match_label, delta_colour, delta_label, GRADE_FIELDS,
     ROCK, ICE, MIXED, ALPINE,
     ENGAGEMENT, ENGAGEMENT_LABELS,
     RISK, RISK_LABELS,
@@ -29,7 +30,6 @@ st.title("🏔️ Mountaineering Route Recommender")
 st.caption("Suggests alpine objectives based on your history, current conditions, and weather.")
 
 
-CHAMONIX_BBOX = latlon_bbox_to_mercator(lon_min=6.6, lat_min=45.7, lon_max=7.1, lat_max=46.0)
 
 _GRADE_LABEL = {
     "rock_onsight":   "Rock (onsight)",
@@ -57,21 +57,8 @@ def _fmt_time(hours: float | None) -> str:
     return f"{int(round(hours / 24))}d"
 
 
-def _eligible_routes() -> list[dict]:
-    """all_fetched minus routes the user has removed."""
-    state = st.session_state["search"]
-    excluded = state.get("excluded_ids", set())
-    return [r for r in state["all_fetched"] if r.get("document_id") not in excluded]
-
-
-def _enrich_displayed() -> None:
-    """
-    Full-fetch the top _TARGET ranked routes and re-rank with the richer data.
-
-    Search stubs are missing height_diff_access (approach vert), so hiking vert
-    scoring is always 0 until enrichment runs. Enriched route IDs are tracked in
-    state["enriched_ids"] so repeated renders don't re-fetch.
-    """
+def _enrich_and_rerank() -> None:
+    """Enrich the top _TARGET routes with full data, then re-rank."""
     state = st.session_state["search"]
     to_enrich = [
         r for r in state["ranked"][:_TARGET]
@@ -79,27 +66,15 @@ def _enrich_displayed() -> None:
     ]
     if not to_enrich:
         return
-
     with st.spinner(f"Loading full details for {len(to_enrich)} routes..."):
-        for route in to_enrich:
-            rid = route["document_id"]
-            full = fetch_route(rid)
-            for i, r in enumerate(state["all_fetched"]):
-                if r.get("document_id") == rid:
-                    state["all_fetched"][i] = {**r, **full}
-                    break
-            state["enriched_ids"].add(rid)
-
-    state["ranked"] = rank_routes(
-        _eligible_routes(), state["params"], state["easy_penalty"]
+        enrich_routes(state["all_fetched"], to_enrich, state["enriched_ids"])
+    state["ranked"] = rerank(
+        state["all_fetched"], state["excluded_ids"], state["params"], state["easy_penalty"]
     )
 
 
 def _fetch_until_enough(params: dict, ep: float) -> None:
-    """
-    Page through the Camptocamp API until we have _TARGET ranked matches.
-    Progress is stored in st.session_state["search"].
-    """
+    """Page through the Camptocamp API until we have _TARGET ranked matches."""
     state = st.session_state["search"]
     state["params"]       = params
     state["easy_penalty"] = ep
@@ -107,19 +82,16 @@ def _fetch_until_enough(params: dict, ep: float) -> None:
     bbox = st.session_state.get("bbox", CHAMONIX_BBOX)
     with st.spinner("Querying Camptocamp..."):
         while len(state["ranked"]) < _TARGET and not state["api_exhausted"]:
-            page, total = search_routes(
-                bbox,
-                activities=_ACTIVITIES,
-                offset=state["api_offset"],
-                page_size=_PAGE_SIZE,
-            )
+            page, total = fetch_page(bbox, _ACTIVITIES, state["api_offset"], _PAGE_SIZE)
             state["all_fetched"].extend(page)
             state["api_offset"] += len(page)
             if state["api_offset"] >= total or len(page) < _PAGE_SIZE:
                 state["api_exhausted"] = True
-            state["ranked"] = rank_routes(_eligible_routes(), params, ep)
+            state["ranked"] = rerank(
+                state["all_fetched"], state["excluded_ids"], params, ep
+            )
 
-    _enrich_displayed()
+    _enrich_and_rerank()
 
 
 TIME_VALUES = [2, 3, 4, 5, 6, 8, 10, 12, 18, 24, 48, 72]
@@ -411,10 +383,11 @@ if search_state:
                 if st.button("✕", key=f"remove_{route_id}", help="Remove this route"):
                     search_state["excluded_ids"].add(route_id)
                     search_state["open_analyses"].discard(route_id)
-                    search_state["ranked"] = rank_routes(
-                        _eligible_routes(), search_state["params"], search_state["easy_penalty"]
+                    search_state["ranked"] = rerank(
+                        search_state["all_fetched"], search_state["excluded_ids"],
+                        search_state["params"], search_state["easy_penalty"],
                     )
-                    _enrich_displayed()
+                    _enrich_and_rerank()
                     st.rerun()
 
         if route_id and route_id in search_state.get("open_analyses", set()):

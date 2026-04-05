@@ -71,6 +71,10 @@ def latlon_bbox_to_mercator(lon_min: float, lat_min: float, lon_max: float, lat_
     return f"{int(x1)},{int(y1)},{int(x2)},{int(y2)}"
 
 
+# Default search area used when the user hasn't drawn a custom bbox.
+CHAMONIX_BBOX = latlon_bbox_to_mercator(lon_min=6.6, lat_min=45.7, lon_max=7.1, lat_max=46.0)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
