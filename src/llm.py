@@ -20,6 +20,7 @@ _MODEL = "claude-haiku-4-5-20251001"
 _client: anthropic.Anthropic | None = None
 _topo_session = requests_cache.CachedSession("topo_cache", expire_after=3600)
 _ROUTE_ANALYSIS_PROMPT = (_PROMPTS_DIR / "route_analysis.md").read_text()
+_ROUTE_SUMMARY_PROMPT  = (_PROMPTS_DIR / "route_summary.md").read_text()
 
 # Skip non-text sources (videos, book purchase pages) that would return empty or
 # irrelevant content. "tvmountain" and "eosya" are video/subscription platforms.
@@ -106,6 +107,46 @@ def _select_outing_ids(stubs: list[dict], today: date) -> set[int]:
     seasonal_ids = {s["document_id"] for s, _ in seasonal[:3]}
 
     return recent_ids | seasonal_ids
+
+
+# ---------------------------------------------------------------------------
+# Lightweight one-sentence summary
+# ---------------------------------------------------------------------------
+
+def summarize_route(route: dict, recent_outings: list[dict]) -> str:
+    """
+    Return a single sentence summarising current conditions for the route.
+
+    Uses the route_summary.md prompt. Pass the 2–3 most recent full outings
+    (with _locale populated) for best results; an empty list is handled gracefully.
+    """
+    name  = route.get("title") or "Unknown route"
+    area  = route.get("title_prefix") or ""
+    grade = route.get("global_rating") or "unknown grade"
+
+    lines = [f"Route: {area} — {name} (grade: {grade})"]
+    if not recent_outings:
+        lines.append("No recent trip reports available.")
+    else:
+        for o in recent_outings:
+            d      = o.get("date_start") or "?"
+            r      = o.get("condition_rating") or "—"
+            oloc   = o.get("_locale") or {}
+            conds  = oloc.get("conditions") or ""
+            wx_txt = oloc.get("weather") or ""
+            lines.append(f"\nReport {d} (rating: {r})")
+            if conds:
+                lines.append(f"Conditions: {conds[:400]}")
+            if wx_txt:
+                lines.append(f"Weather: {wx_txt[:150]}")
+
+    response = _get_client().messages.create(
+        model=_MODEL,
+        max_tokens=120,
+        system=_ROUTE_SUMMARY_PROMPT,
+        messages=[{"role": "user", "content": "\n".join(lines)}],
+    )
+    return response.content[0].text.strip()
 
 
 # ---------------------------------------------------------------------------

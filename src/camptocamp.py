@@ -136,6 +136,29 @@ def fetch_route(route_id: int) -> dict:
     return data
 
 
+def search_routes_by_name(query: str, limit: int = 20) -> list[dict]:
+    """
+    Search routes by name using Camptocamp's full-text search.
+
+    Returns a list of route dicts with the same shape as search_routes():
+    document_id, title, title_prefix, summary, activities, quality, global_rating,
+    and discipline-specific grade fields.
+    """
+    params: dict = {
+        "q": query,
+        "limit": min(limit, 100),
+        "sort": "-quality",
+    }
+    data = _fetch_json("/routes", params)
+    routes = data.get("documents", [])
+    for route in routes:
+        locale = _pick_locale(route.get("locales", []))
+        route["title"] = locale.get("title")
+        route["title_prefix"] = locale.get("title_prefix")
+        route["summary"] = locale.get("summary")
+    return routes
+
+
 def fetch_outing_stubs(route_id: int, limit: int = 200) -> list[dict]:
     """
     Fetch outing stubs for a route without loading conditions text.
