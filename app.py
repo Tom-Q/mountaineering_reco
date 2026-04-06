@@ -415,6 +415,10 @@ if search_state:
                     tip_f = f"Technical vert: {int(diff_vert)}m — {delta_label(d_diff)} (your range: {rng})"
                     fit_pills.append(f'<span style="color:{delta_colour(d_diff)}" title="{tip_f}">{int(diff_vert)}m⬦</span>')
 
+                elev_max = route.get("elevation_max")
+                if elev_max is not None:
+                    fit_pills.append(f'<span title="Summit altitude">{int(elev_max)}m▲</span>')
+
                 fitness_html = (" &thinsp;·&thinsp; ".join(fit_pills)) if fit_pills else ""
                 sep = " &nbsp;|&nbsp; " if grades_html and fitness_html else ""
 
@@ -478,6 +482,17 @@ if search_state:
                             search_state.get("params", {}), date.today(),
                             weather=weather,
                         )
+                        summaries[("_weather", cache_key)] = weather
+                wx = summaries.get(("_weather", cache_key))
+                if wx and wx.ui_table:
+                    elev_str = f"  ·  summit {int(route['elevation_max'])}m" if route.get("elevation_max") else ""
+                    with st.expander("Raw weather data", expanded=False):
+                        st.caption(f"Open-Meteo forecast for {wx.coords[0]:.2f}N, {wx.coords[1]:.2f}E{elev_str}  ·  fetched {wx.fetch_date}")
+                        st.markdown(wx.ui_table)
+                        if wx.historical_text:
+                            st.caption(wx.historical_text)
+                        if wx.fetch_errors:
+                            st.warning("  \n".join(wx.fetch_errors))
                 st.markdown(summaries[cache_key])
                 st.caption(
                     "Source topos and trip reports linked above are the authoritative references. "

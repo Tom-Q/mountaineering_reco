@@ -38,11 +38,12 @@ Given the user's grade profile, assess whether this route is a comfortable objec
 
 If weather data was provided, add this section after "Relative to your level". If no `## Current weather` block is present in the input, omit this section entirely.
 
-Summarise in 3–5 bullets:
-- **Storm days**: call out any days with the ⚠ STORM flag by date. If no storm days, say so briefly.
-- **Snowfall trend**: note total expected snowfall over the week and whether it is significant for this route type.
-- **Wind**: flag any days with gusts above 80 km/h, especially relevant for ridge or exposed routes.
-- **Temperature**: comment on the min/max trend — warming trend affects snow stability; cold nights favour refreezing on mixed routes.
-- **Recent snowpack**: based on the historical summary, note whether fresh heavy snow or a heat event in the past 90 days is relevant to current conditions.
+Summarise in 4–6 bullets:
+- **Storm days**: call out any days with the ⚠STORM flag by date. If no storm days, say so briefly.
+- **Nighttime refreeze**: report the isotherm values from the table as-is. Notation: a plain value like "2450m" means the 0°C line is at that altitude; "**>3100m ⚠**" means the isotherm is above the highest measured level (~3100m) so the exact value is unknown but conditions are warm above 3100m; "<1580m" means refreezing extends below the lowest measured level (~1580m). Do not infer stability conclusions — just report the values and flag the ⚠ rows.
+- **Night cloud cover**: cloudy nights (>60%) inhibit radiative cooling and prevent refreezing even when temperatures are cold. Combine with the isotherm: cold but cloudy = uncertain refreeze.
+- **Altitude wind (~1500m)**: flag days with sustained Wind@850hPa above 50 km/h. This is more relevant than valley gusts for exposed ridges and couloirs.
+- **Snowfall trend**: note expected snowfall over the week. Fresh snow above 20 cm in a single day is a stability concern.
+- **Recent snowpack**: based on the historical summary, note whether large snowfall events in the past 90 days are relevant to current stability.
 
-Be direct and specific. If fetch errors are listed, acknowledge the missing data.
+Be direct and specific about dates. If fetch errors are listed, acknowledge what is missing.
