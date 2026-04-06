@@ -335,6 +335,12 @@ if search_state:
 
     display = ranked[:shown] if params else search_state["all_fetched"][:shown]
 
+    st.warning(
+        "This tool may give inaccurate or dangerous advice. "
+        "Always read the actual source topos in full before committing to any route.",
+        icon="⚠️",
+    )
+
     for route in display:
         location = route.get("title_prefix") or "Unknown location"
         name     = route.get("title")        or "Unnamed route"
@@ -456,3 +462,7 @@ if search_state:
                             search_state.get("params", {}), date.today(),
                         )
                 st.markdown(summaries[route_id])
+                st.caption(
+                    "Source topos and trip reports linked above are the authoritative references. "
+                    "This AI analysis may be incomplete or wrong — verify conditions independently before your climb."
+                )
