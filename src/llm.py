@@ -118,6 +118,7 @@ def build_analysis_prompt(
     full_outings: list[dict],
     user_params: dict,
     today: date,
+    weather=None,
 ) -> str:
     """
     Build the user message for the route analysis LLM call.
@@ -204,21 +205,37 @@ def build_analysis_prompt(
         age = _age_label(d) if d != "?" else "?"
         oloc = o.get("_locale") or {}
         conditions = oloc.get("conditions") or ""
-        weather = oloc.get("weather") or ""
+        outing_weather = oloc.get("weather") or ""
         outing_lines.append(f"\n### Report dated {d} ({age})  (rating: {r})")
         if conditions:
             outing_lines.append(f"Conditions: {conditions[:600]}")
-        if weather:
-            outing_lines.append(f"Weather: {weather[:200]}")
+        if outing_weather:
+            outing_lines.append(f"Weather: {outing_weather[:200]}")
     outing_block = "\n".join(outing_lines)
 
-    return "\n\n".join([
+    parts = [
         f"Today's date: {today.isoformat()}",
         topo_block,
         profile_block,
         date_block,
         outing_block,
-    ])
+    ]
+
+    if weather is not None:
+        wx_lines = [
+            f"## Current weather",
+            f"Fetched: {weather.fetch_date}  |  "
+            f"Coords: {weather.coords[0]:.3f}N, {weather.coords[1]:.3f}E",
+        ]
+        if weather.fetch_errors:
+            wx_lines.append(f"⚠ Fetch errors: {'; '.join(weather.fetch_errors)}")
+        if weather.forecast_text:
+            wx_lines.append("\n### 7-day forecast\n" + weather.forecast_text)
+        if weather.historical_text:
+            wx_lines.append("\n### Historical context (past 90 days)\n" + weather.historical_text)
+        parts.append("\n".join(wx_lines))
+
+    return "\n\n".join(parts)
 
 
 def analyze_route(
@@ -227,17 +244,19 @@ def analyze_route(
     full_outings: list[dict],
     user_params: dict,
     today: date,
+    weather=None,
 ) -> str:
     """
-    Return a markdown-formatted five-section route analysis.
+    Return a markdown-formatted route analysis.
 
-    Sections: Route overview, Topo links, Seasonality, Recent conditions,
-    Relative to your level.
+    Standard sections: Route overview, Topo links, Seasonality, Recent conditions,
+    Relative to your level. A Weather outlook section is appended when weather data
+    is provided.
     """
-    user_msg = build_analysis_prompt(route, stubs, full_outings, user_params, today)
+    user_msg = build_analysis_prompt(route, stubs, full_outings, user_params, today, weather)
     response = _get_client().messages.create(
         model=_MODEL,
-        max_tokens=2000,
+        max_tokens=2500 if weather is not None else 2000,
         system=_ROUTE_ANALYSIS_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
     )

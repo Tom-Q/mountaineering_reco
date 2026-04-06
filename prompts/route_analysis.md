@@ -33,3 +33,16 @@ If reports are available and recent (under 60 days), summarise them by date, not
 
 ## Relative to your level
 Given the user's grade profile, assess whether this route is a comfortable objective, a stretch, or beyond reach. Reference specific grades from the route and the user's limits. Be direct — if it looks like a walk in the park for this climber, say so; if it looks committing or dangerous, say so. Reiterate concerns here to qualify this assessment.
+
+## Weather outlook (conditional — include only if a `## Current weather` block appears in the input)
+
+If weather data was provided, add this section after "Relative to your level". If no `## Current weather` block is present in the input, omit this section entirely.
+
+Summarise in 3–5 bullets:
+- **Storm days**: call out any days with the ⚠ STORM flag by date. If no storm days, say so briefly.
+- **Snowfall trend**: note total expected snowfall over the week and whether it is significant for this route type.
+- **Wind**: flag any days with gusts above 80 km/h, especially relevant for ridge or exposed routes.
+- **Temperature**: comment on the min/max trend — warming trend affects snow stability; cold nights favour refreezing on mixed routes.
+- **Recent snowpack**: based on the historical summary, note whether fresh heavy snow or a heat event in the past 90 days is relevant to current conditions.
+
+Be direct and specific. If fetch errors are listed, acknowledge the missing data.

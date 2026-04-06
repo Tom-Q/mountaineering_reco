@@ -10,6 +10,7 @@ from datetime import date
 
 from src.camptocamp import latlon_bbox_to_mercator, fetch_outing_stubs, fetch_outing_full, CHAMONIX_BBOX
 from src.llm import analyze_route, _select_outing_ids
+from src.weather import fetch_weather
 from src.search import fetch_page, enrich_routes, rerank
 from src.grades import (
     match_colour, match_label, delta_colour, delta_label, GRADE_FIELDS,
@@ -322,6 +323,14 @@ with col_map:
 st.divider()
 
 search_state = st.session_state.get("search")
+weather_check = st.checkbox(
+    "Planning to go in the next few days — include weather check",
+    value=st.session_state.get("weather_check", False),
+    key="weather_check_box",
+    disabled=search_state is None,
+)
+st.session_state["weather_check"] = weather_check
+
 if search_state:
     params  = st.session_state.get("applied_params", {})
     ranked  = search_state["ranked"]
@@ -447,7 +456,8 @@ if search_state:
         if route_id and route_id in search_state.get("open_analyses", set()):
             with st.container(border=True):
                 summaries = search_state.setdefault("summaries", {})
-                if route_id not in summaries:
+                cache_key = (route_id, weather_check)
+                if cache_key not in summaries:
                     with st.spinner("Fetching trip reports and analysing route..."):
                         stubs = fetch_outing_stubs(route_id, limit=200)
                         selected_ids = _select_outing_ids(stubs, date.today())
@@ -457,11 +467,18 @@ if search_state:
                                 full_outings.append(fetch_outing_full(oid))
                             except Exception:
                                 pass
-                        summaries[route_id] = analyze_route(
+                        weather = None
+                        if weather_check:
+                            with st.spinner("Fetching weather data..."):
+                                weather = fetch_weather(route, date.today())
+                            if weather is None:
+                                st.warning("Weather unavailable: no coordinates found for this route.")
+                        summaries[cache_key] = analyze_route(
                             route, stubs, full_outings,
                             search_state.get("params", {}), date.today(),
+                            weather=weather,
                         )
-                st.markdown(summaries[route_id])
+                st.markdown(summaries[cache_key])
                 st.caption(
                     "Source topos and trip reports linked above are the authoritative references. "
                     "This AI analysis may be incomplete or wrong — verify conditions independently before your climb."
