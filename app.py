@@ -1,7 +1,9 @@
 import streamlit as st
 from dotenv import load_dotenv
 import folium
-from folium.plugins import Draw
+from folium.plugins import GeoMan
+from branca.element import MacroElement
+from jinja2 import Template
 from streamlit_folium import st_folium
 
 from datetime import date
@@ -18,6 +20,33 @@ from src.grades import (
     EQUIPMENT, EQUIPMENT_LABELS,
 )
 
+# Pin GeoMan to a specific version to avoid slow @latest resolution on unpkg
+GeoMan.default_js  = [("leaflet_geoman_js",  "https://unpkg.com/@geoman-io/leaflet-geoman-free@2.19.2/dist/leaflet-geoman.js")]
+GeoMan.default_css = [("leaflet_geoman_css", "https://unpkg.com/@geoman-io/leaflet-geoman-free@2.19.2/dist/leaflet-geoman.css")]
+
+
+class _GeoManBridge(MacroElement):
+    """Bridges GeoMan's pm:create/pm:remove events into the draw:created/draw:deleted
+    events that streamlit-folium listens for. Also enforces single-rectangle: clears
+    drawnItems before adding a newly drawn layer."""
+    _template = Template("""
+        {% macro script(this, kwargs) %}
+        (function bridge() {
+            var m = {{ this._parent.get_name() }};
+            if (!m || !m.pm || !window.drawnItems) { setTimeout(bridge, 200); return; }
+            m.on('pm:create', function(e) {
+                window.drawnItems.clearLayers();
+                window.drawnItems.addLayer(e.layer);
+                m.fire('draw:created', {layer: e.layer, layerType: 'rectangle'});
+            });
+            m.on('pm:remove', function(e) {
+                window.drawnItems.removeLayer(e.layer);
+                m.fire('draw:deleted', {layers: {getLayers: function(){ return [e.layer]; }}});
+            });
+        })();
+        {% endmacro %}
+    """)
+
 load_dotenv()
 
 st.set_page_config(
@@ -28,8 +57,6 @@ st.set_page_config(
 
 st.title("🏔️ Mountaineering Route Recommender")
 st.caption("Suggests alpine objectives based on your history, current conditions, and weather.")
-
-
 
 _GRADE_LABEL = {
     "rock_onsight":   "Rock (onsight)",
@@ -76,10 +103,7 @@ def _enrich_and_rerank() -> None:
 def _fetch_until_enough(params: dict, ep: float) -> None:
     """Page through the Camptocamp API until we have _TARGET ranked matches."""
     state = st.session_state["search"]
-    state["params"]       = params
-    state["easy_penalty"] = ep
-
-    bbox = st.session_state.get("bbox", CHAMONIX_BBOX)
+    bbox = st.session_state["bbox"]
     with st.spinner("Querying Camptocamp..."):
         while len(state["ranked"]) < _TARGET and not state["api_exhausted"]:
             page, total = fetch_page(bbox, _ACTIVITIES, state["api_offset"], _PAGE_SIZE)
@@ -104,7 +128,7 @@ SPEED_LABELS  = {0.5: "2× faster", 0.67: "1.5× faster", 0.8: "1.2× faster",
 
 
 if "bbox" not in st.session_state:
-    st.session_state["bbox"] = CHAMONIX_BBOX
+    st.session_state["bbox"] = None
 
 # ---------------------------------------------------------------------------
 # Layout: search parameters form (left) + area map (right)
@@ -195,7 +219,11 @@ with col_form:
                 help="Minimum fixed gear expected. Higher P = more self-reliance required.",
             )
 
-        if st.form_submit_button("Search routes in selected area", use_container_width=True):
+        if st.form_submit_button(
+            "Search routes in selected area",
+            disabled=not st.session_state.get("bbox"),
+            use_container_width=True,
+        ):
             params = {
                 # Skill
                 "rock_onsight":           rock_onsight,
@@ -236,7 +264,11 @@ with col_form:
 
 with col_map:
     st.markdown("**Search area**")
-    st.caption("Draw a rectangle to select a search area. Default: Mont Blanc massif.")
+    if st.session_state.get("bbox"):
+        st.caption("Draw a new rectangle to change the search area.")
+    else:
+        st.caption("Draw a rectangle on the map, or use the default area below.")
+
     _m = folium.Map(
         location=[45.85, 6.87],
         zoom_start=8,
@@ -247,20 +279,27 @@ with col_map:
             '<a href="https://opentopomap.org">OpenTopoMap</a>'
         ),
     )
-    Draw(
-        draw_options={
-            "rectangle": True,
-            "polyline": False, "polygon": False, "circle": False,
-            "marker": False, "circlemarker": False,
-        },
-        edit_options={"edit": False},
+    if st.session_state.get("bbox") == CHAMONIX_BBOX:
+        folium.Rectangle(bounds=[[45.7, 6.6], [46.0, 7.1]], fill=True, fill_opacity=0.2).add_to(_m)
+    GeoMan(
+        position="topleft",
+        drawRectangle=True,
+        drawMarker=False, drawCircleMarker=False, drawPolyline=False,
+        drawPolygon=False, drawCircle=False, drawText=False,
+        editMode=False, dragMode=False, cutPolygon=False, rotateMode=False,
+        removalMode=True,
     ).add_to(_m)
-    _map_result = st_folium(_m, key="area_map", use_container_width=True, height=500,
+    _GeoManBridge().add_to(_m)
+    # Key switches when Chamonix bbox is active, forcing a map remount with the
+    # pre-drawn rectangle.
+    _map_key = "area_map_chamonix" if st.session_state.get("bbox") == CHAMONIX_BBOX else "area_map"
+    _prev_bbox = st.session_state.get("bbox")
+    _map_result = st_folium(_m, key=_map_key, use_container_width=True, height=500,
                             returned_objects=["all_drawings"])
     _drawings = (_map_result or {}).get("all_drawings")
     if _drawings is not None:
-        # all_drawings is None on reruns that don't involve map interaction — don't touch bbox.
-        # It's [] when the user deleted their drawing, and a list of shapes when they drew one.
+        # all_drawings is None on reruns with no map interaction — don't touch bbox.
+        # [] means user deleted all drawings; a list means a shape was drawn.
         if _drawings:
             _coords = _drawings[-1]["geometry"]["coordinates"][0]
             _lons = [c[0] for c in _coords]
@@ -269,7 +308,16 @@ with col_map:
                 min(_lons), min(_lats), max(_lons), max(_lats)
             )
         else:
+            st.session_state["bbox"] = None
+    if st.session_state.get("bbox") != _prev_bbox:
+        st.rerun()
+
+    if st.button("Use Mont Blanc massif (default)", use_container_width=True):
+        if st.session_state.get("bbox") != CHAMONIX_BBOX:
             st.session_state["bbox"] = CHAMONIX_BBOX
+            st.rerun()
+    if st.session_state.get("bbox") == CHAMONIX_BBOX:
+        st.caption("Active area: Mont Blanc massif")
 
 st.divider()
 
@@ -326,8 +374,8 @@ if search_state:
 
                 duration_h = (route.get("calculated_duration") or 0) * 24
                 if duration_h > 0:
-                    pace = params.get("pace", 1.0)
-                    adjusted_h = duration_h * pace
+                    adjusted_pace = params.get("pace", 1.0)
+                    adjusted_h = duration_h * adjusted_pace
                     d_time = deltas.get("moving_time", 0)
                     t_min = params.get("moving_time_min")
                     t_max = params.get("moving_time_max")
