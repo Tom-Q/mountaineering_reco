@@ -57,8 +57,12 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("🏔️ Mountaineering Route Recommender")
-st.caption("Suggests alpine objectives based on your history, current conditions, and weather.")
+st.markdown("##### 🏔️ Mountaineering Route Recommender")
+
+st.markdown("""<style>
+section[data-testid="stMainBlockContainer"] { padding-top: 1rem !important; }
+.stTabs [data-baseweb="tab"] button p { font-size: 1.1rem !important; font-weight: 600; }
+</style>""", unsafe_allow_html=True)
 
 _GRADE_LABEL = {
     "rock_onsight":   "Rock (onsight)",
@@ -102,6 +106,37 @@ def _enrich_and_rerank() -> None:
     )
 
 
+def _prefetch_summaries() -> None:
+    """
+    For each of the top _TARGET routes:
+    - Fetch outing stubs (limit=10) for the stats row (report count, last date, peak months)
+    - Generate a one-sentence guidebook description via the LLM using topo fields
+
+    Stubs and summaries are cached so re-renders don't re-fetch.
+    No full outing text is fetched here — that happens only in Tab 2.
+    """
+    state = st.session_state["search"]
+    stubs_cache = state.setdefault("stubs", {})
+    summaries   = state.setdefault("summaries", {})
+
+    routes_needed = [
+        r for r in state["ranked"][:_TARGET]
+        if r.get("document_id") not in summaries
+    ]
+    if not routes_needed:
+        return
+
+    with st.spinner(f"Loading summaries for {len(routes_needed)} routes..."):
+        for route in routes_needed:
+            rid = route.get("document_id")
+            if rid is None:
+                continue
+            if rid not in stubs_cache:
+                stubs_cache[rid] = fetch_outing_stubs(rid, limit=10)
+            report_count = len(stubs_cache[rid])
+            summaries[rid] = summarize_route(route, report_count)
+
+
 def _fetch_until_enough(params: dict, ep: float) -> None:
     """Page through the Camptocamp API until we have _TARGET ranked matches."""
     state = st.session_state["search"]
@@ -118,6 +153,7 @@ def _fetch_until_enough(params: dict, ep: float) -> None:
             )
 
     _enrich_and_rerank()
+    _prefetch_summaries()
 
 
 TIME_VALUES = [2, 3, 4, 5, 6, 8, 10, 12, 18, 24, 48, 72]
@@ -208,11 +244,10 @@ with tab1:
     col_map, col_search = st.columns([3, 1])
 
     with col_map:
-        st.markdown("**Search area**")
         if st.session_state.get("bbox"):
             st.caption("Draw a new rectangle to change the search area.")
         else:
-            st.caption("Draw a rectangle on the map, or use the default area below.")
+            st.caption("Draw a rectangle on the map to select a search area.")
 
         _m = folium.Map(
             location=[45.85, 6.87],
@@ -239,7 +274,7 @@ with tab1:
         # pre-drawn rectangle.
         _map_key = "area_map_chamonix" if st.session_state.get("bbox") == CHAMONIX_BBOX else "area_map"
         _prev_bbox = st.session_state.get("bbox")
-        _map_result = st_folium(_m, key=_map_key, use_container_width=True, height=500,
+        _map_result = st_folium(_m, key=_map_key, use_container_width=True, height=350,
                                 returned_objects=["all_drawings"])
         _drawings = (_map_result or {}).get("all_drawings")
         if _drawings is not None:
@@ -257,15 +292,13 @@ with tab1:
         if st.session_state.get("bbox") != _prev_bbox:
             st.rerun()
 
+    with col_search:
         if st.button("Use Mont Blanc massif (default)", use_container_width=True):
             if st.session_state.get("bbox") != CHAMONIX_BBOX:
                 st.session_state["bbox"] = CHAMONIX_BBOX
                 st.rerun()
         if st.session_state.get("bbox") == CHAMONIX_BBOX:
             st.caption("Active area: Mont Blanc massif")
-
-    with col_search:
-        st.markdown("**Search filters**")
         moving_time = st.select_slider(
             "Moving time (min – max)",
             options=TIME_VALUES, value=(3, 12),
@@ -322,7 +355,6 @@ with tab1:
                 "enriched_ids":  set(),
                 "params":        params,
                 "easy_penalty":  easy_penalty,
-                "open_analyses": set(),
                 "excluded_ids":  set(),
                 "summaries":     {},
             }
@@ -362,7 +394,40 @@ with tab1:
             url = f"https://www.camptocamp.org/routes/{route_id}" if route_id else None
             link = f"[{location} — {name}]({url})" if url else f"**{location}** — {name}"
 
-            col_main, col_analyse, col_remove = st.columns([12, 1, 1])
+            # --- Build stats + summary strings (merged into title line) ---
+            _MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun",
+                           "Jul","Aug","Sep","Oct","Nov","Dec"]
+            _stubs_cache = search_state.setdefault("stubs", {})
+            _route_stubs = _stubs_cache.get(route_id, []) if route_id else []
+            _stats_html = ""
+            if _route_stubs:
+                _dated: list[tuple[dict, date]] = []
+                for _s in _route_stubs:
+                    _raw = _s.get("date_start")
+                    if _raw:
+                        try:
+                            _dated.append((_s, datetime.strptime(_raw, "%Y-%m-%d").date()))
+                        except ValueError:
+                            pass
+                _dated.sort(key=lambda x: x[1], reverse=True)
+                _total = len(_route_stubs)
+                _last  = _dated[0][1] if _dated else None
+                if _last:
+                    _days = (date.today() - _last).days
+                    _staleness = f"{_days}d ago" if _days < 14 else (f"{_days // 7}w ago" if _days < 60 else f"{_days // 30}mo ago")
+                else:
+                    _staleness = "no reports"
+                _mcounts  = Counter(_d.month for _, _d in _dated)
+                _months   = " · ".join(_MONTH_ABBR[_m - 1] for _m, _ in _mcounts.most_common(3))
+                _stats_html = (
+                    f"<small style='color:#888'>"
+                    f"{_total} reports &thinsp;·&thinsp; last {_staleness}"
+                    + (f" &thinsp;·&thinsp; peak {_months}" if _months else "")
+                    + f"</small>"
+                )
+            _summaries = search_state.setdefault("summaries", {})
+
+            col_main, col_analyse, col_remove = st.columns([10, 2, 1])
 
             with col_main:
                 if score is not None:
@@ -429,118 +494,39 @@ with tab1:
                     else:
                         warn = ""
 
+                    _stats_sep = " &thinsp;·&thinsp; " if (fitness_html or grades_html) and _stats_html else ""
                     st.markdown(
-                        f"{dot} {link} &nbsp; <small>{grades_html}{sep}{fitness_html}{warn}</small>",
+                        f"{dot} {link} &nbsp; <small>{grades_html}{sep}{fitness_html}{warn}{_stats_sep}{_stats_html}</small>"
+                        + (f"<br><small><em>{_summaries[route_id]}</em></small>" if route_id and route_id in _summaries else ""),
                         unsafe_allow_html=True,
                     )
                 else:
-                    st.markdown(link)
+                    st.markdown(
+                        link
+                        + (f" &nbsp; <small>{_stats_html}</small>" if _stats_html else "")
+                        + (f"<br><small><em>{_summaries[route_id]}</em></small>" if route_id and route_id in _summaries else ""),
+                        unsafe_allow_html=True,
+                    )
 
             with col_analyse:
                 if route_id:
-                    is_open = route_id in search_state.get("open_analyses", set())
-                    if st.button("Close" if is_open else "Analyse", key=f"analyse_{route_id}"):
-                        if is_open:
-                            search_state["open_analyses"].discard(route_id)
-                        else:
-                            search_state["open_analyses"].add(route_id)
+                    if st.button("Full analysis →", key=f"full_analysis_{route_id}",
+                                 help="Open in Analyse a route tab"):
+                        search_state["analysis_target"] = route
                         st.rerun()
 
             with col_remove:
                 if route_id:
                     if st.button("✕", key=f"remove_{route_id}", help="Remove this route"):
                         search_state["excluded_ids"].add(route_id)
-                        search_state["open_analyses"].discard(route_id)
                         search_state["ranked"] = rerank(
                             search_state["all_fetched"], search_state["excluded_ids"],
                             search_state["params"], search_state["easy_penalty"],
                         )
                         _enrich_and_rerank()
+                        _prefetch_summaries()
                         st.rerun()
 
-            if route_id and route_id in search_state.get("open_analyses", set()):
-                with st.container(border=True):
-                    # --- Fetch and cache outing stubs ---
-                    stubs_cache = search_state.setdefault("stubs", {})
-                    if route_id not in stubs_cache:
-                        with st.spinner("Loading trip reports..."):
-                            stubs_cache[route_id] = fetch_outing_stubs(route_id, limit=200)
-                    route_stubs = stubs_cache[route_id]
-
-                    # --- Compute stats from stubs ---
-                    _MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun",
-                                   "Jul","Aug","Sep","Oct","Nov","Dec"]
-                    dated_stubs: list[tuple[dict, date]] = []
-                    for s in route_stubs:
-                        raw = s.get("date_start")
-                        if raw:
-                            try:
-                                dated_stubs.append((s, datetime.strptime(raw, "%Y-%m-%d").date()))
-                            except ValueError:
-                                pass
-                    dated_stubs.sort(key=lambda x: x[1], reverse=True)
-
-                    total_count = len(route_stubs)
-                    last_date   = dated_stubs[0][1] if dated_stubs else None
-                    if last_date:
-                        days_ago = (date.today() - last_date).days
-                        if days_ago < 14:
-                            staleness = f"{days_ago}d ago"
-                        elif days_ago < 60:
-                            staleness = f"{days_ago // 7}w ago"
-                        else:
-                            staleness = f"{days_ago // 30}mo ago"
-                    else:
-                        staleness = "no reports"
-
-                    month_counts = Counter(d.month for _, d in dated_stubs)
-                    top_months   = [_MONTH_ABBR[m - 1] for m, _ in month_counts.most_common(3)]
-
-                    _RATING_COLOUR = {
-                        "excellent": "#2e7d32", "good": "#2e7d32",
-                        "average": "#e65100",
-                        "bad": "#c62828", "awful": "#c62828",
-                    }
-                    rating_dots = " ".join(
-                        f'<span style="color:{_RATING_COLOUR.get(s.get("condition_rating",""),"#888")}'
-                        f';font-size:1.1em;" title="{s.get("condition_rating") or "unknown"}">●</span>'
-                        for s, _ in dated_stubs[:5]
-                    )
-
-                    # --- Stats row ---
-                    c2c_card_url = f"https://www.camptocamp.org/routes/{route_id}"
-                    months_str   = " · ".join(top_months) if top_months else "—"
-                    ratings_str  = rating_dots if rating_dots else "—"
-                    st.markdown(
-                        f"**{total_count}** reports &nbsp;·&nbsp; last: **{staleness}**"
-                        f" &nbsp;·&nbsp; best months: **{months_str}**"
-                        f" &nbsp;·&nbsp; recent: {ratings_str}"
-                        f" &nbsp;·&nbsp; [C2C ↗]({c2c_card_url})",
-                        unsafe_allow_html=True,
-                    )
-
-                    # --- One-sentence summary (on demand) ---
-                    summaries   = search_state.setdefault("summaries", {})
-                    summary_key = ("1sentence", route_id)
-                    col_s, col_f = st.columns(2)
-                    with col_s:
-                        if summary_key not in summaries:
-                            if st.button("Conditions summary ▶", key=f"summarize_{route_id}"):
-                                with st.spinner("Summarising conditions..."):
-                                    recent_full = []
-                                    for s, _ in dated_stubs[:3]:
-                                        try:
-                                            recent_full.append(fetch_outing_full(s["document_id"]))
-                                        except Exception:
-                                            pass
-                                    summaries[summary_key] = summarize_route(route, recent_full)
-                                st.rerun()
-                        else:
-                            st.markdown(f"*{summaries[summary_key]}*")
-                    with col_f:
-                        if st.button("Full analysis →", key=f"full_analysis_{route_id}"):
-                            search_state["analysis_target"] = route
-                            st.info("Route loaded — switch to the **Analyse a route** tab for the full analysis.")
 
 # ===========================================================================
 # TAB 2 — Analyse a route: name search or pre-loaded, then full analysis

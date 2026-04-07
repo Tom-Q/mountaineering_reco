@@ -113,36 +113,43 @@ def _select_outing_ids(stubs: list[dict], today: date) -> set[int]:
 # Lightweight one-sentence summary
 # ---------------------------------------------------------------------------
 
-def summarize_route(route: dict, recent_outings: list[dict]) -> str:
+def summarize_route(route: dict, report_count: int = 0) -> str:
     """
-    Return a single sentence summarising current conditions for the route.
+    Return a single guidebook-style sentence describing the route.
 
-    Uses the route_summary.md prompt. Pass the 2–3 most recent full outings
-    (with _locale populated) for best results; an empty list is handled gracefully.
+    Uses topo fields from the enriched route dict (_locale populated by fetch_route).
+    report_count is passed separately (derived from stubs) for popularity context.
     """
     name  = route.get("title") or "Unknown route"
     area  = route.get("title_prefix") or ""
     grade = route.get("global_rating") or "unknown grade"
+    locale = route.get("_locale") or {}
 
     lines = [f"Route: {area} — {name} (grade: {grade})"]
-    if not recent_outings:
-        lines.append("No recent trip reports available.")
-    else:
-        for o in recent_outings:
-            d      = o.get("date_start") or "?"
-            r      = o.get("condition_rating") or "—"
-            oloc   = o.get("_locale") or {}
-            conds  = oloc.get("conditions") or ""
-            wx_txt = oloc.get("weather") or ""
-            lines.append(f"\nReport {d} (rating: {r})")
-            if conds:
-                lines.append(f"Conditions: {conds[:400]}")
-            if wx_txt:
-                lines.append(f"Weather: {wx_txt[:150]}")
+
+    duration_h = (route.get("calculated_duration") or 0) * 24
+    if duration_h > 0:
+        lines.append(f"Duration: {duration_h:.0f}h")
+
+    elev_max = route.get("elevation_max")
+    if elev_max:
+        lines.append(f"Summit elevation: {int(elev_max)}m")
+
+    activities = route.get("activities") or []
+    if activities:
+        lines.append(f"Activities: {', '.join(activities)}")
+
+    if report_count:
+        lines.append(f"Trip reports on Camptocamp: {report_count}")
+
+    for field in ("description", "remarks", "slope"):
+        val = locale.get(field)
+        if val:
+            lines.append(f"{field}: {val[:600]}")
 
     response = _get_client().messages.create(
         model=_MODEL,
-        max_tokens=120,
+        max_tokens=80,
         system=_ROUTE_SUMMARY_PROMPT,
         messages=[{"role": "user", "content": "\n".join(lines)}],
     )
