@@ -57,11 +57,13 @@ st.set_page_config(
     layout="wide",
 )
 
-st.markdown("##### 🏔️ Mountaineering Route Recommender")
-
 st.markdown("""<style>
-section[data-testid="stMainBlockContainer"] { padding-top: 1rem !important; }
-.stTabs [data-baseweb="tab"] button p { font-size: 1.1rem !important; font-weight: 600; }
+section[data-testid="stMainBlockContainer"] { padding-top: 0 !important; }
+.stMainBlockContainer { padding-top: 0 !important; }
+div[data-testid="stAppViewBlockContainer"] { padding-top: 0 !important; }
+div[data-testid="stSidebarHeader"] { display: none; }
+header[data-testid="stHeader"] { display: none; }
+.stTabs [data-baseweb="tab-list"] [data-testid="stMarkdownContainer"] p { font-size: 1.4rem !important; font-weight: 600; }
 </style>""", unsafe_allow_html=True)
 
 _GRADE_LABEL = {
@@ -78,6 +80,10 @@ _GRADE_LABEL = {
 _ACTIVITIES = ["rock_climbing", "mountain_climbing", "ice_climbing", "snow_ice_mixed"]
 _PAGE_SIZE   = 100
 _TARGET      = 5    # number of routes to display
+
+
+_MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun",
+               "Jul","Aug","Sep","Oct","Nov","Dec"]
 
 
 def _fmt_time(hours: float | None) -> str:
@@ -395,12 +401,12 @@ with tab1:
             link = f"[{location} — {name}]({url})" if url else f"**{location}** — {name}"
 
             # --- Build stats + summary strings (merged into title line) ---
-            _MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun",
-                           "Jul","Aug","Sep","Oct","Nov","Dec"]
             _stubs_cache = search_state.setdefault("stubs", {})
             _route_stubs = _stubs_cache.get(route_id, []) if route_id else []
             _stats_html = ""
-            if _route_stubs:
+            if route_id in _stubs_cache and not _route_stubs:
+                _stats_html = "<small style='color:#888'>0 reports</small>"
+            elif _route_stubs:
                 _dated: list[tuple[dict, date]] = []
                 for _s in _route_stubs:
                     _raw = _s.get("date_start")

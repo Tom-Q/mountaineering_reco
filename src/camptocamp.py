@@ -38,7 +38,7 @@ def _fetch_json(path: str, params: dict | None = None) -> dict:
     most one per _MIN_REQUEST_INTERVAL seconds; cache hits skip the wait.
     """
     global _last_request_time
-    params = {**(params or {})}
+    params = dict(params or {})
     params.setdefault("pl", _DEFAULT_LANG)
 
     elapsed = time.time() - _last_request_time
@@ -48,6 +48,9 @@ def _fetch_json(path: str, params: dict | None = None) -> dict:
     response = _session.get(f"{BASE_URL}{path}", params=params)
     response.raise_for_status()
 
+    # requests_cache sets response.from_cache=True on cache hits; the attribute
+    # is absent on a plain requests.Response. Only update the rate-limit timer
+    # on real network calls (from_cache missing or False).
     if not getattr(response, "from_cache", True):
         _last_request_time = time.time()
 

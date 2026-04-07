@@ -25,6 +25,7 @@ _ROUTE_SUMMARY_PROMPT  = (_PROMPTS_DIR / "route_summary.md").read_text()
 # Skip non-text sources (videos, book purchase pages) that would return empty or
 # irrelevant content. "tvmountain" and "eosya" are video/subscription platforms.
 _SKIP_URL_PATTERNS = ["youtube.com", "youtu.be", "tvmountain", "eosya", "amazon", "fnac", "glenat"]
+_GOOD_RATINGS = {"good", "excellent"}
 
 
 def _get_client() -> anthropic.Anthropic:
@@ -96,14 +97,15 @@ def _select_outing_ids(stubs: list[dict], today: date) -> set[int]:
     # Up to 3 from same season (±30 days of today's date) in prior years,
     # preferring good/excellent ratings
     window = timedelta(days=30)
+    # Replace year with a fixed value on both sides so timedelta arithmetic
+    # compares only month+day, ignoring which year the outing was in.
     today_no_year = today.replace(year=2000)
     seasonal = [
         (s, d) for s, d in dated
         if d.year < today.year
         and abs(d.replace(year=2000) - today_no_year) <= window
     ]
-    _GOOD = {"good", "excellent"}
-    seasonal.sort(key=lambda x: (x[0].get("condition_rating") not in _GOOD, -x[1].year))
+    seasonal.sort(key=lambda x: (x[0].get("condition_rating") not in _GOOD_RATINGS, -x[1].year))
     seasonal_ids = {s["document_id"] for s, _ in seasonal[:3]}
 
     return recent_ids | seasonal_ids
