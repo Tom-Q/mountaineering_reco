@@ -213,12 +213,10 @@ def build_analysis_prompt(
     profile_lines = ["## User climbing profile"]
     profile_map = {
         "rock_onsight": "Rock onsight",
-        "rock_redpoint": "Rock redpoint",
         "rock_trad": "Rock trad",
         "ice_max": "Ice max",
         "mixed_max": "Mixed max",
         "alpine_max": "Alpine max",
-        "alpine_routes_count": "Alpine routes done",
     }
     for key, label in profile_map.items():
         val = user_params.get(key)

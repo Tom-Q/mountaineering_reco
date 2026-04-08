@@ -64,6 +64,7 @@ div[data-testid="stAppViewBlockContainer"] { padding-top: 0 !important; }
 div[data-testid="stSidebarHeader"] { display: none; }
 header[data-testid="stHeader"] { display: none; }
 .stTabs [data-baseweb="tab-list"] [data-testid="stMarkdownContainer"] p { font-size: 1.4rem !important; font-weight: 600; }
+section[data-testid="stSidebar"] { min-width: 350px !important; max-width: 350px !important; }
 </style>""", unsafe_allow_html=True)
 
 _GRADE_LABEL = {
@@ -180,29 +181,19 @@ if "bbox" not in st.session_state:
 with st.sidebar:
     st.markdown("### Your profile")
 
-    # --- Skill ---------------------------------------------------------------
-    st.markdown("**Skill**")
-    s1, s2, s3 = st.columns(3)
-    rock_onsight  = s1.selectbox("Onsight",  ROCK, index=ROCK.index("6a+"),
+    s1, s2 = st.columns(2)
+    rock_onsight = s1.selectbox("Onsight", ROCK, index=ROCK.index("6a+"),
         help="Hardest sport grade you can lead first-try, no falls, no beta.")
-    rock_redpoint = s2.selectbox("Redpoint", ROCK, index=ROCK.index("6c"),
-        help="Hardest sport grade you can lead after working the moves.")
-    rock_trad     = s3.selectbox("Trad",     ["N/A"] + ROCK, index=1 + ROCK.index("6a+"),
+    rock_trad = s2.selectbox("Trad", ["N/A"] + ROCK, index=1 + ROCK.index("6a+"),
         help="Hardest grade you can lead on gear, first try.")
-    s1, s2, s3 = st.columns(3)
-    ice_max    = s1.selectbox("Ice",    ["—"] + ICE,   index=1 + ICE.index("WI3"))
-    mixed_max  = s2.selectbox("Mixed",  ["—"] + MIXED, index=0)
-    alpine_max = s3.selectbox("Alpine", ALPINE,        index=ALPINE.index("TD+"),
-        help="Hardest overall alpine grade completed in reasonable conditions.")
-    alpine_routes_count = st.selectbox("Alpine routes done", ["<5", "5–20", "20–50", "50+"], index=1)
 
-    # --- Fitness -------------------------------------------------------------
-    st.markdown("**Fitness**")
-    hiking_vert_max = st.number_input(
-        "Max approach/descent vert (m)",
-        min_value=0, max_value=4000, value=1500, step=100,
-        help="Non-technical terrain only (approach + descent).",
-    )
+    s1, s2 = st.columns(2)
+    ice_max = s1.selectbox("Ice", ["—"] + ICE, index=1 + ICE.index("WI3"))
+    mixed_max = s2.selectbox("Mixed", ["—"] + MIXED, index=0)
+
+    alpine_max = st.selectbox("Alpine", ALPINE, index=ALPINE.index("TD+"),
+        help="Hardest overall alpine grade completed in reasonable conditions.")
+
     pace = st.select_slider(
         "Pace vs. C2C estimates",
         options=SPEED_OPTIONS, value=1.0,
@@ -210,8 +201,6 @@ with st.sidebar:
         help="Your speed relative to Camptocamp's time estimates. Applied to the displayed moving time and used for scoring.",
     )
 
-    # --- Risk ----------------------------------------------------------------
-    st.markdown("**Risk**")
     engagement_max = st.selectbox(
         "Max engagement",
         ENGAGEMENT, index=ENGAGEMENT.index("III"),
@@ -247,7 +236,7 @@ tab1, tab2 = st.tabs(["Find routes", "Analyse a route"])
 # TAB 1 — Find routes: map + search + triage cards
 # ===========================================================================
 with tab1:
-    col_map, col_search = st.columns([3, 1])
+    col_results, col_map = st.columns([3, 2])
 
     with col_map:
         if st.session_state.get("bbox"):
@@ -280,7 +269,7 @@ with tab1:
         # pre-drawn rectangle.
         _map_key = "area_map_chamonix" if st.session_state.get("bbox") == CHAMONIX_BBOX else "area_map"
         _prev_bbox = st.session_state.get("bbox")
-        _map_result = st_folium(_m, key=_map_key, use_container_width=True, height=350,
+        _map_result = st_folium(_m, key=_map_key, use_container_width=True, height=450,
                                 returned_objects=["all_drawings"])
         _drawings = (_map_result or {}).get("all_drawings")
         if _drawings is not None:
@@ -298,7 +287,6 @@ with tab1:
         if st.session_state.get("bbox") != _prev_bbox:
             st.rerun()
 
-    with col_search:
         if st.button("Use Mont Blanc massif (default)", use_container_width=True):
             if st.session_state.get("bbox") != CHAMONIX_BBOX:
                 st.session_state["bbox"] = CHAMONIX_BBOX
@@ -311,10 +299,16 @@ with tab1:
             format_func=lambda v: TIME_LABELS[v],
             help="Total moving time on the route.",
         )
-        difficulties_vert = st.slider(
-            "Technical vert (min – max, m)",
+        _c = st.columns(2)
+        difficulties_vert = _c[0].slider(
+            "Tech vert (m)",
             min_value=0, max_value=1500, value=(100, 600), step=50,
             help="Vertical extent of sustained technical difficulties.",
+        )
+        hiking_vert_max = _c[1].slider(
+            "Approach vert (m)",
+            min_value=0, max_value=4000, value=1500, step=100,
+            help="Non-technical terrain only (approach + descent).",
         )
         easy_penalty = st.slider(
             "Penalise routes below my limit",
@@ -324,6 +318,8 @@ with tab1:
                  "Off: easy routes rank the same as routes at your limit. "
                  "On: routes well below your limit are pushed down in results.",
         )
+
+    with col_results:
         if st.button(
             "Search routes in selected area",
             disabled=not st.session_state.get("bbox"),
@@ -332,12 +328,10 @@ with tab1:
             params = {
                 # Skill
                 "rock_onsight":           rock_onsight,
-                "rock_redpoint":          rock_redpoint,
                 "rock_trad":              None if rock_trad == "N/A" else rock_trad,
                 "ice_max":                None if ice_max   == "—"   else ice_max,
                 "mixed_max":              None if mixed_max == "—"   else mixed_max,
                 "alpine_max":             alpine_max,
-                "alpine_routes_count":    alpine_routes_count,
                 # Fitness
                 "hiking_vert_max":        hiking_vert_max,
                 "difficulties_vert_min":  difficulties_vert[0],
@@ -366,202 +360,243 @@ with tab1:
             }
             _fetch_until_enough(params, easy_penalty)
 
-    st.divider()
+        st.divider()
 
-    search_state = st.session_state.get("search")
+        search_state = st.session_state.get("search")
 
-    if search_state:
-        params  = st.session_state.get("applied_params", {})
-        ranked  = search_state["ranked"]
-        shown   = search_state["shown"]
-        fetched = len(search_state["all_fetched"])
+        if search_state:
+            params  = st.session_state.get("applied_params", {})
+            ranked  = search_state["ranked"]
+            shown   = search_state["shown"]
+            fetched = len(search_state["all_fetched"])
 
-        if params:
-            st.subheader(f"Top {min(shown, len(ranked))} routes (of {len(ranked)} matched, {fetched} fetched)")
-        else:
-            st.subheader(f"{fetched} routes found")
+            if params:
+                st.subheader(f"Top {min(shown, len(ranked))} routes (of {len(ranked)} matched, {fetched} fetched)")
+            else:
+                st.subheader(f"{fetched} routes found")
 
-        display = ranked[:shown] if params else search_state["all_fetched"][:shown]
+            display = ranked[:shown] if params else search_state["all_fetched"][:shown]
 
-        st.warning(
-            "This tool may give inaccurate or dangerous advice. "
-            "Always read the actual source topos in full before committing to any route.",
-            icon="⚠️",
-        )
+            st.warning(
+                "This tool may give inaccurate or dangerous advice. "
+                "Always read the actual source topos in full before committing to any route.",
+                icon="⚠️",
+            )
 
-        for route in display:
-            location = route.get("title_prefix") or "Unknown location"
-            name     = route.get("title")        or "Unnamed route"
-            score    = route.get("_score")
-            direction = route.get("_direction")
-            warnings = route.get("_warnings", [])
+            for route in display:
+                location = route.get("title_prefix") or "Unknown location"
+                name     = route.get("title")        or "Unnamed route"
+                score    = route.get("_score")
+                direction = route.get("_direction")
+                warnings = route.get("_warnings", [])
 
-            route_id = route.get("document_id")
-            url = f"https://www.camptocamp.org/routes/{route_id}" if route_id else None
-            link = f"[{location} — {name}]({url})" if url else f"**{location}** — {name}"
+                route_id = route.get("document_id")
+                url = f"https://www.camptocamp.org/routes/{route_id}" if route_id else None
+                link = f"[{location} — {name}]({url})" if url else f"**{location}** — {name}"
 
-            # --- Build stats + summary strings (merged into title line) ---
-            _stubs_cache = search_state.setdefault("stubs", {})
-            _route_stubs = _stubs_cache.get(route_id, []) if route_id else []
-            _stats_html = ""
-            if route_id in _stubs_cache and not _route_stubs:
-                _stats_html = "<small style='color:#888'>0 reports</small>"
-            elif _route_stubs:
-                _dated: list[tuple[dict, date]] = []
-                for _s in _route_stubs:
-                    _raw = _s.get("date_start")
-                    if _raw:
-                        try:
-                            _dated.append((_s, datetime.strptime(_raw, "%Y-%m-%d").date()))
-                        except ValueError:
-                            pass
-                _dated.sort(key=lambda x: x[1], reverse=True)
-                _total = len(_route_stubs)
-                _last  = _dated[0][1] if _dated else None
-                if _last:
-                    _days = (date.today() - _last).days
-                    _staleness = f"{_days}d ago" if _days < 14 else (f"{_days // 7}w ago" if _days < 60 else f"{_days // 30}mo ago")
-                else:
-                    _staleness = "no reports"
-                _mcounts  = Counter(_d.month for _, _d in _dated)
-                _months   = " · ".join(_MONTH_ABBR[_m - 1] for _m, _ in _mcounts.most_common(3))
-                _stats_html = (
-                    f"<small style='color:#888'>"
-                    f"{_total} reports &thinsp;·&thinsp; last {_staleness}"
-                    + (f" &thinsp;·&thinsp; peak {_months}" if _months else "")
-                    + f"</small>"
-                )
-            _summaries = search_state.setdefault("summaries", {})
-
-            col_main, col_analyse, col_remove = st.columns([10, 2, 1])
-
-            with col_main:
-                if score is not None:
-                    colour = match_colour(score, direction)
-                    dot_tip = f"Score {score:.1f} — {match_label(score, direction)}. Lower is better; 0 = perfect match."
-                    dot = f'<span style="color:{colour};font-size:1.3em;" title="{dot_tip}">●</span>'
-
-                    # One coloured pill per grade field that has a value on this route
-                    deltas = route.get("_deltas", {})
-                    pills = []
-                    for sp_key, api_field, *_ in GRADE_FIELDS:
-                        val = route.get(api_field)
-                        if val is None:
-                            continue
-                        delta    = deltas.get(sp_key)
-                        colour_g = delta_colour(delta)
-                        label    = _GRADE_LABEL.get(sp_key, sp_key)
-                        limit    = params.get(sp_key) or "—"
-                        tip = f"{label}: {val} — {delta_label(delta)} (your limit: {limit})"
-                        pills.append(f'<span style="color:{colour_g}" title="{tip}">{val}</span>')
-                    grades_html = " &nbsp; ".join(pills)
-
-                    # Fitness pills: time, approach vert, difficulties vert
-                    fit_pills = []
-
-                    duration_h = (route.get("calculated_duration") or 0) * 24
-                    if duration_h > 0:
-                        adjusted_pace = params.get("pace", 1.0)
-                        adjusted_h = duration_h * adjusted_pace
-                        d_time = deltas.get("moving_time", 0)
-                        t_min = params.get("moving_time_min")
-                        t_max = params.get("moving_time_max")
-                        rng = f"{_fmt_time(t_min)}–{_fmt_time(t_max)}" if t_min and t_max else "—"
-                        tip_f = f"Moving time: {_fmt_time(adjusted_h)} — {delta_label(d_time)} (your range: {rng})"
-                        fit_pills.append(f'<span style="color:{delta_colour(d_time)}" title="{tip_f}">{_fmt_time(adjusted_h)}</span>')
-
-                    approach = route.get("height_diff_access")
-                    if approach is not None:
-                        d_vert = deltas.get("hiking_vert", 0)
-                        v_max = params.get("hiking_vert_max")
-                        lim = f"{int(v_max)}m" if v_max else "—"
-                        tip_f = f"Approach vert: {int(approach)}m — {delta_label(d_vert)} (your max: {lim})"
-                        fit_pills.append(f'<span style="color:{delta_colour(d_vert)}" title="{tip_f}">{int(approach)}m↑</span>')
-
-                    diff_vert = route.get("height_diff_difficulties")
-                    if diff_vert is not None:
-                        d_diff = deltas.get("difficulties_vert", 0)
-                        v_min = params.get("difficulties_vert_min")
-                        v_max = params.get("difficulties_vert_max")
-                        rng = f"{int(v_min)}–{int(v_max)}m" if v_min is not None and v_max is not None else "—"
-                        tip_f = f"Technical vert: {int(diff_vert)}m — {delta_label(d_diff)} (your range: {rng})"
-                        fit_pills.append(f'<span style="color:{delta_colour(d_diff)}" title="{tip_f}">{int(diff_vert)}m⬦</span>')
-
-                    elev_max = route.get("elevation_max")
-                    if elev_max is not None:
-                        fit_pills.append(f'<span title="Summit altitude">{int(elev_max)}m▲</span>')
-
-                    fitness_html = (" &thinsp;·&thinsp; ".join(fit_pills)) if fit_pills else ""
-                    sep = " &nbsp;|&nbsp; " if grades_html and fitness_html else ""
-
-                    if warnings:
-                        warn_tip = "&#10;".join(warnings)
-                        warn = f' <span title="{warn_tip}">⚠️</span>'
+                # --- Build stats + summary strings (merged into title line) ---
+                _stubs_cache = search_state.setdefault("stubs", {})
+                _route_stubs = _stubs_cache.get(route_id, []) if route_id else []
+                _stats_html = ""
+                if route_id in _stubs_cache and not _route_stubs:
+                    _stats_html = "<small style='color:#888'>0 reports</small>"
+                elif _route_stubs:
+                    _dated: list[tuple[dict, date]] = []
+                    for _s in _route_stubs:
+                        _raw = _s.get("date_start")
+                        if _raw:
+                            try:
+                                _dated.append((_s, datetime.strptime(_raw, "%Y-%m-%d").date()))
+                            except ValueError:
+                                pass
+                    _dated.sort(key=lambda x: x[1], reverse=True)
+                    _total = len(_route_stubs)
+                    _last  = _dated[0][1] if _dated else None
+                    if _last:
+                        _days = (date.today() - _last).days
+                        _staleness = f"{_days}d ago" if _days < 14 else (f"{_days // 7}w ago" if _days < 60 else f"{_days // 30}mo ago")
                     else:
-                        warn = ""
-
-                    _stats_sep = " &thinsp;·&thinsp; " if (fitness_html or grades_html) and _stats_html else ""
-                    st.markdown(
-                        f"{dot} {link} &nbsp; <small>{grades_html}{sep}{fitness_html}{warn}{_stats_sep}{_stats_html}</small>"
-                        + (f"<br><small><em>{_summaries[route_id]}</em></small>" if route_id and route_id in _summaries else ""),
-                        unsafe_allow_html=True,
+                        _staleness = "no reports"
+                    _mcounts  = Counter(_d.month for _, _d in _dated)
+                    _months   = " · ".join(_MONTH_ABBR[_m - 1] for _m, _ in _mcounts.most_common(3))
+                    _stats_html = (
+                        f"<small style='color:#888'>"
+                        f"{_total} reports &thinsp;·&thinsp; last {_staleness}"
+                        + (f" &thinsp;·&thinsp; peak {_months}" if _months else "")
+                        + f"</small>"
                     )
-                else:
-                    st.markdown(
-                        link
-                        + (f" &nbsp; <small>{_stats_html}</small>" if _stats_html else "")
-                        + (f"<br><small><em>{_summaries[route_id]}</em></small>" if route_id and route_id in _summaries else ""),
-                        unsafe_allow_html=True,
-                    )
+                _summaries = search_state.setdefault("summaries", {})
 
-            with col_analyse:
-                if route_id:
-                    if st.button("Full analysis →", key=f"full_analysis_{route_id}",
-                                 help="Open in Analyse a route tab"):
-                        search_state["analysis_target"] = route
-                        st.rerun()
+                col_main, col_analyse, col_remove = st.columns([10, 2, 1])
 
-            with col_remove:
-                if route_id:
-                    if st.button("✕", key=f"remove_{route_id}", help="Remove this route"):
-                        search_state["excluded_ids"].add(route_id)
-                        search_state["ranked"] = rerank(
-                            search_state["all_fetched"], search_state["excluded_ids"],
-                            search_state["params"], search_state["easy_penalty"],
+                with col_main:
+                    if score is not None:
+                        colour = match_colour(score, direction)
+                        dot_tip = f"Score {score:.1f} — {match_label(score, direction)}. Lower is better; 0 = perfect match."
+                        dot = f'<span style="color:{colour};font-size:1.3em;" title="{dot_tip}">●</span>'
+
+                        # One coloured pill per grade field that has a value on this route
+                        deltas = route.get("_deltas", {})
+                        pills = []
+                        for sp_key, api_field, *_ in GRADE_FIELDS:
+                            val = route.get(api_field)
+                            if val is None:
+                                continue
+                            delta    = deltas.get(sp_key)
+                            colour_g = delta_colour(delta)
+                            label    = _GRADE_LABEL.get(sp_key, sp_key)
+                            limit    = params.get(sp_key) or "—"
+                            tip = f"{label}: {val} — {delta_label(delta)} (your limit: {limit})"
+                            pills.append(f'<span style="color:{colour_g}" title="{tip}">{val}</span>')
+                        grades_html = " &nbsp; ".join(pills)
+
+                        # Fitness pills: time, approach vert, difficulties vert
+                        fit_pills = []
+
+                        duration_h = (route.get("calculated_duration") or 0) * 24
+                        if duration_h > 0:
+                            adjusted_pace = params.get("pace", 1.0)
+                            adjusted_h = duration_h * adjusted_pace
+                            d_time = deltas.get("moving_time", 0)
+                            t_min = params.get("moving_time_min")
+                            t_max = params.get("moving_time_max")
+                            rng = f"{_fmt_time(t_min)}–{_fmt_time(t_max)}" if t_min and t_max else "—"
+                            tip_f = f"Moving time: {_fmt_time(adjusted_h)} — {delta_label(d_time)} (your range: {rng})"
+                            fit_pills.append(f'<span style="color:{delta_colour(d_time)}" title="{tip_f}">{_fmt_time(adjusted_h)}</span>')
+
+                        approach = route.get("height_diff_access")
+                        if approach is not None:
+                            d_vert = deltas.get("hiking_vert", 0)
+                            v_max = params.get("hiking_vert_max")
+                            lim = f"{int(v_max)}m" if v_max else "—"
+                            tip_f = f"Approach vert: {int(approach)}m — {delta_label(d_vert)} (your max: {lim})"
+                            fit_pills.append(f'<span style="color:{delta_colour(d_vert)}" title="{tip_f}">{int(approach)}m↑</span>')
+
+                        diff_vert = route.get("height_diff_difficulties")
+                        if diff_vert is not None:
+                            d_diff = deltas.get("difficulties_vert", 0)
+                            v_min = params.get("difficulties_vert_min")
+                            v_max = params.get("difficulties_vert_max")
+                            rng = f"{int(v_min)}–{int(v_max)}m" if v_min is not None and v_max is not None else "—"
+                            tip_f = f"Technical vert: {int(diff_vert)}m — {delta_label(d_diff)} (your range: {rng})"
+                            fit_pills.append(f'<span style="color:{delta_colour(d_diff)}" title="{tip_f}">{int(diff_vert)}m⬦</span>')
+
+                        elev_max = route.get("elevation_max")
+                        if elev_max is not None:
+                            fit_pills.append(f'<span title="Summit altitude">{int(elev_max)}m▲</span>')
+
+                        fitness_html = (" &thinsp;·&thinsp; ".join(fit_pills)) if fit_pills else ""
+                        sep = " &nbsp;|&nbsp; " if grades_html and fitness_html else ""
+
+                        if warnings:
+                            warn_tip = "&#10;".join(warnings)
+                            warn = f' <span title="{warn_tip}">⚠️</span>'
+                        else:
+                            warn = ""
+
+                        _stats_sep = " &thinsp;·&thinsp; " if (fitness_html or grades_html) and _stats_html else ""
+                        st.markdown(
+                            f"{dot} {link} &nbsp; <small>{grades_html}{sep}{fitness_html}{warn}{_stats_sep}{_stats_html}</small>"
+                            + (f"<br><small><em>{_summaries[route_id]}</em></small>" if route_id and route_id in _summaries else ""),
+                            unsafe_allow_html=True,
                         )
-                        _enrich_and_rerank()
-                        _prefetch_summaries()
-                        st.rerun()
+                    else:
+                        st.markdown(
+                            link
+                            + (f" &nbsp; <small>{_stats_html}</small>" if _stats_html else "")
+                            + (f"<br><small><em>{_summaries[route_id]}</em></small>" if route_id and route_id in _summaries else ""),
+                            unsafe_allow_html=True,
+                        )
+
+                with col_analyse:
+                    if route_id:
+                        if st.button("Full analysis →", key=f"full_analysis_{route_id}",
+                                     help="Open in Analyse a route tab"):
+                            search_state["analysis_target"] = route
+                            st.rerun()
+
+                with col_remove:
+                    if route_id:
+                        if st.button("✕", key=f"remove_{route_id}", help="Remove this route"):
+                            search_state["excluded_ids"].add(route_id)
+                            search_state["ranked"] = rerank(
+                                search_state["all_fetched"], search_state["excluded_ids"],
+                                search_state["params"], search_state["easy_penalty"],
+                            )
+                            _enrich_and_rerank()
+                            _prefetch_summaries()
+                            st.rerun()
 
 
 # ===========================================================================
-# TAB 2 — Analyse a route: name search or pre-loaded, then full analysis
+# TAB 2 — Analyse a route: select from Tab 1 results or search by name
 # ===========================================================================
 with tab2:
-    # --- Route selection ---
-    target = st.session_state.get("search", {}).get("analysis_target") if st.session_state.get("search") else None
-    tab2_route = st.session_state.get("tab2_route")
+    weather_check2 = st.checkbox(
+        "Planning to go in the next few days — include weather check",
+        value=False,
+        key="weather_check_tab2",
+    )
 
-    if target and tab2_route is None:
-        rid   = target.get("document_id")
-        rname = target.get("title") or "Unknown route"
-        rarea = target.get("title_prefix") or ""
-        st.info(f"Route loaded from recommendations: **{rarea} — {rname}**")
-        col_load, col_clear = st.columns([2, 1])
-        with col_load:
-            if st.button("Analyse this route", use_container_width=True):
-                st.session_state["tab2_route"] = target
-                tab2_route = target
-                st.rerun()
-        with col_clear:
-            if st.button("Clear", use_container_width=True):
-                st.session_state["search"]["analysis_target"] = None
+    # --- Route selector ---
+    ranked = (st.session_state.get("search") or {}).get("ranked") or []
+    top5   = ranked[:5]
+
+    # If Tab 1 "Full analysis →" was clicked, auto-select that route
+    target    = (st.session_state.get("search") or {}).get("analysis_target")
+    target_id = target.get("document_id") if target else None
+
+    tab2_route  = st.session_state.get("tab2_route")
+    selected_id = tab2_route.get("document_id") if tab2_route else None
+
+    if target_id and selected_id != target_id:
+        st.session_state["tab2_route"] = target
+        tab2_route  = target
+        selected_id = target_id
+
+    if top5:
+        st.markdown("**Routes from your search**")
+
+        def _route_label(r):
+            area  = r.get("title_prefix") or ""
+            name  = r.get("title") or "Unnamed"
+            grade = r.get("global_rating") or ""
+            label = f"{area} — {name}" if area else name
+            return f"{label}  ({grade})" if grade else label
+
+        ids    = [r.get("document_id") for r in top5]
+        try:
+            current_idx = ids.index(selected_id) if selected_id in ids else None
+        except ValueError:
+            current_idx = None
+
+        chosen_idx = st.radio(
+            "Select a route",
+            options=range(len(top5)),
+            format_func=lambda i: _route_label(top5[i]),
+            index=current_idx,
+            label_visibility="collapsed",
+        )
+        if chosen_idx is not None:
+            chosen_route = top5[chosen_idx]
+            if chosen_route.get("document_id") != selected_id:
+                st.session_state["tab2_route"] = chosen_route
+                tab2_route  = chosen_route
+                selected_id = chosen_route.get("document_id")
+                # Clear analysis_target so it doesn't fight the radio selection
+                if st.session_state.get("search"):
+                    st.session_state["search"]["analysis_target"] = None
+
                 st.rerun()
 
-    # Name search (always visible when no route is loaded for analysis)
-    if tab2_route is None:
-        st.markdown("**Search for a route by name**")
-        query = st.text_input("Route name", placeholder="e.g. Frendo spur, Gervasutti pillar…", label_visibility="collapsed")
+    # Name search — prominent when no Tab 1 results, collapsed otherwise
+    with st.expander("Search by name", expanded=not top5):
+        query = st.text_input(
+            "Route name",
+            placeholder="e.g. Frendo spur, Gervasutti pillar…",
+            label_visibility="collapsed",
+            key="tab2_name_query",
+        )
         if query:
             with st.spinner("Searching Camptocamp..."):
                 name_results = search_routes_by_name(query, limit=15)
@@ -569,24 +604,27 @@ with tab2:
                 st.warning("No routes found. Try a different name or spelling.")
             else:
                 for r in name_results:
-                    rid   = r.get("document_id")
-                    rname = r.get("title") or "Unnamed"
-                    rarea = r.get("title_prefix") or ""
-                    grade = r.get("global_rating") or ""
-                    acts  = ", ".join(r.get("activities") or [])
-                    label = f"{rarea} — {rname}" if rarea else rname
-                    sublabel = "  ·  ".join(filter(None, [grade, acts]))
+                    rid_r    = r.get("document_id")
+                    rname_r  = r.get("title") or "Unnamed"
+                    rarea_r  = r.get("title_prefix") or ""
+                    grade_r  = r.get("global_rating") or ""
+                    acts_r   = ", ".join(r.get("activities") or [])
+                    label_r  = f"{rarea_r} — {rname_r}" if rarea_r else rname_r
+                    sublabel = "  ·  ".join(filter(None, [grade_r, acts_r]))
                     col_r, col_btn = st.columns([6, 1])
                     with col_r:
-                        st.markdown(f"**{label}**" + (f"  <small>{sublabel}</small>" if sublabel else ""),
-                                    unsafe_allow_html=True)
+                        st.markdown(
+                            f"**{label_r}**" + (f"  <small>{sublabel}</small>" if sublabel else ""),
+                            unsafe_allow_html=True,
+                        )
                     with col_btn:
-                        if st.button("Select", key=f"select_{rid}"):
+                        if st.button("Select", key=f"select_{rid_r}"):
                             with st.spinner("Loading route details..."):
-                                st.session_state["tab2_route"] = fetch_route(rid)
+                                st.session_state["tab2_route"] = fetch_route(rid_r)
+
                             st.rerun()
 
-    # --- Full analysis ---
+    # --- Full analysis (auto-triggered once a route is selected) ---
     if tab2_route is not None:
         rid   = tab2_route.get("document_id")
         rname = tab2_route.get("title") or "Unknown route"
@@ -594,31 +632,16 @@ with tab2:
         grade = tab2_route.get("global_rating") or ""
         c2c_url = f"https://www.camptocamp.org/routes/{rid}" if rid else None
 
-        st.subheader(f"{rarea} — {rname}" if rarea else rname)
-        if grade or c2c_url:
-            meta = "  ·  ".join(filter(None, [grade, f"[C2C ↗]({c2c_url})" if c2c_url else None]))
-            st.markdown(meta)
+        st.divider()
+        meta_parts = [f"**{rarea} — {rname}**" if rarea else f"**{rname}**"]
+        if grade:   meta_parts.append(grade)
+        if c2c_url: meta_parts.append(f"[C2C ↗]({c2c_url})")
+        st.markdown("  ·  ".join(meta_parts))
 
-        weather_check2 = st.checkbox(
-            "Planning to go in the next few days — include weather check",
-            value=False,
-            key="weather_check_tab2",
-        )
-
-        col_analyse_btn, col_change = st.columns([2, 1])
-        with col_analyse_btn:
-            do_analyse = st.button("Analyse", use_container_width=True, key="tab2_analyse_btn")
-        with col_change:
-            if st.button("Choose a different route", use_container_width=True, key="tab2_change"):
-                st.session_state.pop("tab2_route", None)
-                if st.session_state.get("search"):
-                    st.session_state["search"]["analysis_target"] = None
-                st.rerun()
-
-        analyses = st.session_state.setdefault("tab2_analyses", {})
+        analyses  = st.session_state.setdefault("tab2_analyses", {})
         cache_key = (rid, weather_check2)
 
-        if do_analyse and cache_key not in analyses:
+        if cache_key not in analyses:
             with st.spinner("Fetching trip reports and analysing route..."):
                 stubs2 = fetch_outing_stubs(rid, limit=200)
                 selected_ids2 = _select_outing_ids(stubs2, date.today())
@@ -632,37 +655,37 @@ with tab2:
                 if weather_check2:
                     with st.spinner("Fetching weather data..."):
                         weather2 = fetch_weather(tab2_route, date.today())
-                    if weather2 is None:
-                        st.warning("Weather unavailable: no coordinates found for this route.")
                 user_params2 = {
                     "rock_onsight":        rock_onsight,
-                    "rock_redpoint":       rock_redpoint,
                     "rock_trad":           None if rock_trad == "N/A" else rock_trad,
                     "ice_max":             None if ice_max   == "—"   else ice_max,
                     "mixed_max":           None if mixed_max == "—"   else mixed_max,
                     "alpine_max":          alpine_max,
-                    "alpine_routes_count": alpine_routes_count,
                 }
                 analyses[cache_key] = {
                     "text":    analyze_route(tab2_route, stubs2, full_outings2, user_params2, date.today(), weather=weather2),
                     "weather": weather2,
                 }
+
             st.rerun()
 
-        if cache_key in analyses:
-            result = analyses[cache_key]
-            wx = result["weather"]
-            if wx and wx.ui_table:
-                elev_str = f"  ·  summit {int(tab2_route['elevation_max'])}m" if tab2_route.get("elevation_max") else ""
-                with st.expander("Raw weather data", expanded=False):
-                    st.caption(f"Open-Meteo forecast for {wx.coords[0]:.2f}N, {wx.coords[1]:.2f}E{elev_str}  ·  fetched {wx.fetch_date}")
-                    st.markdown(wx.ui_table)
-                    if wx.historical_text:
-                        st.caption(wx.historical_text)
-                    if wx.fetch_errors:
-                        st.warning("  \n".join(wx.fetch_errors))
-            st.markdown(result["text"])
-            st.caption(
-                "Source topos and trip reports linked above are the authoritative references. "
-                "This AI analysis may be incomplete or wrong — verify conditions independently before your climb."
-            )
+        result = analyses[cache_key]
+        wx = result["weather"]
+        if weather_check2 and wx is None:
+            st.warning("Weather unavailable: no coordinates found for this route.")
+        elif wx and wx.fetch_errors and not wx.ui_table:
+            st.warning("Weather fetch failed: " + "  \n".join(wx.fetch_errors))
+        if wx and wx.ui_table:
+            elev_str = f"  ·  summit {int(tab2_route['elevation_max'])}m" if tab2_route.get("elevation_max") else ""
+            with st.expander("Raw weather data", expanded=False):
+                st.caption(f"Open-Meteo forecast for {wx.coords[0]:.2f}N, {wx.coords[1]:.2f}E{elev_str}  ·  fetched {wx.fetch_date}")
+                st.markdown(wx.ui_table)
+                if wx.historical_text:
+                    st.caption(wx.historical_text)
+                if wx.fetch_errors:
+                    st.warning("  \n".join(wx.fetch_errors))
+        st.markdown(result["text"])
+        st.caption(
+            "Source topos and trip reports linked above are the authoritative references. "
+            "This AI analysis may be incomplete or wrong — verify conditions independently before your climb."
+        )

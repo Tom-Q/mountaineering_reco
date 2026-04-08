@@ -6,6 +6,14 @@ Fetches a 7-day forecast and a 90-day historical summary from Open-Meteo
 
 The forecast uses hourly data aggregated to daily values, including pressure-level
 variables (850/700 hPa) for altitude wind and nighttime 0°C isotherm computation.
+
+TODO: look into a better source for weather forecasts (free, but potentially with a registration),
+that has historical pressure data allowing us to compute past isotherm. This is important info
+for mountaineering.
+TODO: get avalanche reports, meteo france has some (requires registration); look into avalanche reports
+for switzerland and italy.
+TODO: consider whether it's worth getting a more precise isotherm estimate by including more hPa ranges.
+Additionally, consider: is hPa temp a good enough approximation for isotherm? 
 """
 
 import json
