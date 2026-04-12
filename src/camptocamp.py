@@ -109,6 +109,7 @@ def search_routes(
         "sort": "-quality",
         "limit": page_size,
         "offset": offset,
+        "qa": 1,  # restrict to documented routes (quality assured)
     }
     if activities:
         params["act"] = ",".join(activities)

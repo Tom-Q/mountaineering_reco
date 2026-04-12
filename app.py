@@ -116,7 +116,7 @@ def _enrich_and_rerank() -> None:
 def _prefetch_summaries() -> None:
     """
     For each of the top _TARGET routes:
-    - Fetch outing stubs (limit=10) for the stats row (report count, last date, peak months)
+    - Fetch outing stubs (limit=50) for the stats row (report count, last date, peak months)
     - Generate a one-sentence guidebook description via the LLM using topo fields
 
     Stubs and summaries are cached so re-renders don't re-fetch.
@@ -139,7 +139,7 @@ def _prefetch_summaries() -> None:
             if rid is None:
                 continue
             if rid not in stubs_cache:
-                stubs_cache[rid] = fetch_outing_stubs(rid, limit=10)
+                stubs_cache[rid] = fetch_outing_stubs(rid, limit=50)
             report_count = len(stubs_cache[rid])
             summaries[rid] = summarize_route(route, report_count)
 
