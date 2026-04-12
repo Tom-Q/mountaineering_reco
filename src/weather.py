@@ -7,13 +7,10 @@ Fetches a 7-day forecast and a 90-day historical summary from Open-Meteo
 The forecast uses hourly data aggregated to daily values, including pressure-level
 variables (850/700 hPa) for altitude wind and nighttime 0°C isotherm computation.
 
-TODO: look into a better source for weather forecasts (free, but potentially with a registration),
-that has historical pressure data allowing us to compute past isotherm. This is important info
-for mountaineering.
 TODO: get avalanche reports, meteo france has some (requires registration); look into avalanche reports
 for switzerland and italy.
 TODO: consider whether it's worth getting a more precise isotherm estimate by including more hPa ranges.
-Additionally, consider: is hPa temp a good enough approximation for isotherm? 
+Additionally, consider: is hPa temp a good enough approximation for isotherm?
 """
 
 import json
@@ -46,9 +43,12 @@ class _DayForecast:
     temp_min: float
     temp_max: float
     wind_850hpa: float         # mean daytime wind at ~1500m
-    nighttime_isotherm: str    # e.g. "2450m", ">3100m", "<1580m"
-    night_cloud_pct: float     # mean cloud cover during night hours
-    storm: bool                # snowfall > 10cm OR gusts > 80 km/h
+    refreeze_isotherm: str    # lowest 0°C altitude seen during 00–09 UTC
+    refreeze_hour: int | None # UTC hour when refreeze minimum occurred
+    melt_isotherm: str        # highest 0°C altitude seen during 07–23 UTC
+    melt_hour: int | None     # UTC hour when melt maximum occurred
+    night_cloud_pct: float    # mean cloud cover during 00–09 UTC
+    storm: bool               # snowfall > 15cm OR gusts > 80 km/h
 
 
 def route_coords(route: dict) -> tuple[float, float] | None:
@@ -92,36 +92,72 @@ def _mean(values: list) -> float | None:
     return sum(clean) / len(clean) if clean else None
 
 
-def _nighttime_isotherm(t850: float | None, t700: float | None, t500: float | None,
-                         h850: float | None, h700: float | None, h500: float | None) -> str:
+def _compute_isotherm(levels: list[tuple[float | None, float | None]]) -> str:
     """
-    Derive the nighttime 0°C isotherm altitude from mean nighttime values at
-    three pressure levels: 850 hPa (~1500m), 700 hPa (~3000m), 500 hPa (~5500m).
+    Derive the 0°C isotherm altitude from (temp_°C, geopotential_height_m) pairs.
 
-    Interpolates between the two levels that straddle 0°C.
-    Returns a formatted string like "2450m", "<1580m", or ">5500m".
-    Falls back to "n/a" if data is missing.
+    Accepts up to 5 pressure levels (925/850/700/600/500 hPa). Pairs with None
+    values are skipped. Sorts by height and interpolates linearly between the two
+    levels that straddle 0°C.
+
+    Returns: "2450m" (interpolated), "<1580m" (below lowest level),
+    ">5500m" (above highest level), or "n/a" if fewer than 2 valid levels.
     """
-    if any(v is None for v in (t850, t700, h850, h700)):
+    valid = sorted(
+        [(t, h) for t, h in levels if t is not None and h is not None],
+        key=lambda x: x[1],
+    )
+    if len(valid) < 2:
         return "n/a"
-    if t850 <= 0:
-        return f"<{h850:.0f}m"
-    if t700 <= 0:
-        fraction = t850 / (t850 - t700)
-        return f"{h850 + fraction * (h700 - h850):.0f}m"
-    # Isotherm is above 700hPa — try 500hPa
-    if t500 is None or h500 is None:
-        return f">{h700:.0f}m"
-    if t500 <= 0:
-        fraction = t700 / (t700 - t500)
-        return f"{h700 + fraction * (h500 - h700):.0f}m"
-    # Above 500hPa — genuinely warm throughout the column
-    return f">{h500:.0f}m"
+    if valid[0][0] <= 0:
+        return f"<{valid[0][1]:.0f}m"
+    for i in range(len(valid) - 1):
+        t_lo, h_lo = valid[i]
+        t_hi, h_hi = valid[i + 1]
+        if t_hi <= 0:
+            frac = t_lo / (t_lo - t_hi)
+            return f"{h_lo + frac * (h_hi - h_lo):.0f}m"
+    return f">{valid[-1][1]:.0f}m"
 
 
-def _build_forecast(lat: float, lon: float) -> list[_DayForecast]:
+def _iso_meters(iso: str) -> float | None:
     """
-    Fetch 7-day hourly forecast from Open-Meteo and aggregate to daily values.
+    Convert an isotherm string to a float altitude in metres for comparison.
+
+    ">5500m" → 5500.1 (just above that level)
+    "<760m"  → 759.9 (just below that level)
+    "2450m"  → 2450.0
+    "n/a"    → None
+    """
+    if iso == "n/a":
+        return None
+    if iso.startswith(">"):
+        try:
+            return float(iso[1:].rstrip("m")) + 0.1
+        except ValueError:
+            return None
+    if iso.startswith("<"):
+        try:
+            return float(iso[1:].rstrip("m")) - 0.1
+        except ValueError:
+            return None
+    try:
+        return float(iso.rstrip("m"))
+    except ValueError:
+        return None
+
+
+def _build_all_days(lat: float, lon: float, past_days: int = 7) -> list[_DayForecast]:
+    """
+    Fetch past `past_days` days + 7-day forecast from Open-Meteo in one call.
+
+    Returns all days in chronological order. The caller splits on today's date.
+    Pressure-level data (5 levels: 925/850/700/600/500 hPa) is available for
+    both historical and forecast days via the `past_days` parameter.
+
+    Isotherms:
+    - refreeze_isotherm: minimum 0°C altitude over 00–09 UTC (coldest hours)
+    - melt_isotherm:     maximum 0°C altitude over 07–23 UTC (hottest hours)
     """
     r = _session.get(
         "https://api.open-meteo.com/v1/forecast",
@@ -130,11 +166,15 @@ def _build_forecast(lat: float, lon: float) -> list[_DayForecast]:
             "longitude": lon,
             "hourly": [
                 "temperature_2m",
+                "temperature_925hPa",
                 "temperature_850hPa",
                 "temperature_700hPa",
+                "temperature_600hPa",
                 "temperature_500hPa",
+                "geopotential_height_925hPa",
                 "geopotential_height_850hPa",
                 "geopotential_height_700hPa",
+                "geopotential_height_600hPa",
                 "geopotential_height_500hPa",
                 "windspeed_850hPa",
                 "cloudcover",
@@ -143,6 +183,7 @@ def _build_forecast(lat: float, lon: float) -> list[_DayForecast]:
                 "windspeed_10m",
                 "windgusts_10m",
             ],
+            "past_days": past_days,
             "forecast_days": 7,
             "timezone": "UTC",
         },
@@ -151,52 +192,75 @@ def _build_forecast(lat: float, lon: float) -> list[_DayForecast]:
     r.raise_for_status()
     h = r.json()["hourly"]
 
-    times     = h["time"]
-    t2m       = h["temperature_2m"]
-    t850      = h["temperature_850hPa"]
-    t700      = h["temperature_700hPa"]
-    t500      = h["temperature_500hPa"]
-    gh850     = h["geopotential_height_850hPa"]
-    gh700     = h["geopotential_height_700hPa"]
-    gh500     = h["geopotential_height_500hPa"]
-    w850      = h["windspeed_850hPa"]
-    cloud     = h["cloudcover"]
-    precip    = h["precipitation"]
-    snowfall  = h["snowfall"]
-    wind10    = h["windspeed_10m"]
-    gusts     = h["windgusts_10m"]
+    times  = h["time"]
+    t2m    = h["temperature_2m"]
+    t925   = h["temperature_925hPa"]
+    t850   = h["temperature_850hPa"]
+    t700   = h["temperature_700hPa"]
+    t600   = h["temperature_600hPa"]
+    t500   = h["temperature_500hPa"]
+    gh925  = h["geopotential_height_925hPa"]
+    gh850  = h["geopotential_height_850hPa"]
+    gh700  = h["geopotential_height_700hPa"]
+    gh600  = h["geopotential_height_600hPa"]
+    gh500  = h["geopotential_height_500hPa"]
+    w850   = h["windspeed_850hPa"]
+    cloud  = h["cloudcover"]
+    precip = h["precipitation"]
+    snow   = h["snowfall"]
+    wind10 = h["windspeed_10m"]
+    gusts  = h["windgusts_10m"]
 
-    # Group by date
     days: dict[str, dict] = {}
     for i, ts in enumerate(times):
         day_str = ts[:10]
         hour = int(ts[11:13])
         if day_str not in days:
-            days[day_str] = {k: [] for k in (
-                "t2m", "t850_day", "t850_night", "t700_night", "t500_night",
-                "gh850_night", "gh700_night", "gh500_night", "w850_day",
-                "cloud_night", "precip", "snowfall", "wind10", "gusts"
-            )}
+            days[day_str] = {
+                "t2m": [], "w850_day": [], "cloud_rfz": [],
+                "precip": [], "snowfall": [], "wind10": [], "gusts": [],
+                # Each entry: (hour, t925, t850, t700, t600, t500, gh925, gh850, gh700, gh600, gh500)
+                "rfz_hourly": [],
+                "mlt_hourly": [],
+            }
         d = days[day_str]
         d["t2m"].append(t2m[i])
         d["precip"].append(precip[i])
-        d["snowfall"].append(snowfall[i])
+        d["snowfall"].append(snow[i])
         d["wind10"].append(wind10[i])
         d["gusts"].append(gusts[i])
-        # Daytime: 06–18 UTC
+
         if 6 <= hour < 18:
-            d["t850_day"].append(t850[i])
             d["w850_day"].append(w850[i])
-        # Nighttime: 20–23 of this day + 00–06 belongs to next day's night
-        # Treat 20–06 UTC as the night starting on this calendar date
-        if hour >= 20 or hour < 6:
-            d["t850_night"].append(t850[i])
-            d["t700_night"].append(t700[i])
-            d["t500_night"].append(t500[i])
-            d["gh850_night"].append(gh850[i])
-            d["gh700_night"].append(gh700[i])
-            d["gh500_night"].append(gh500[i])
-            d["cloud_night"].append(cloud[i])
+
+        row = (hour,
+               t925[i], t850[i], t700[i], t600[i], t500[i],
+               gh925[i], gh850[i], gh700[i], gh600[i], gh500[i])
+        if 0 <= hour < 9:
+            d["cloud_rfz"].append(cloud[i])
+            d["rfz_hourly"].append(row)
+        if 7 <= hour < 24:
+            d["mlt_hourly"].append(row)
+
+    def _best_isotherm(hourly_rows: list, find_min: bool) -> tuple[str, int | None]:
+        """
+        Compute the isotherm at each hour from simultaneous pressure-level readings,
+        then return the minimum (find_min=True) or maximum altitude and its UTC hour.
+        This ensures each isotherm is physically consistent — all levels from the same moment.
+        """
+        best_m: float | None = None
+        best_str = "n/a"
+        best_hour: int | None = None
+        for row in hourly_rows:
+            hr = row[0]
+            levels = list(zip(row[1:6], row[6:11]))   # (temp, height) for each of 5 levels
+            iso = _compute_isotherm(levels)
+            m = _iso_meters(iso)
+            if m is None:
+                continue
+            if best_m is None or (find_min and m < best_m) or (not find_min and m > best_m):
+                best_m, best_str, best_hour = m, iso, hr
+        return best_str, best_hour
 
     result = []
     for day_str, d in sorted(days.items()):
@@ -207,16 +271,10 @@ def _build_forecast(lat: float, lon: float) -> list[_DayForecast]:
         temp_min  = min((v for v in d["t2m"]     if v is not None), default=0.0)
         temp_max  = max((v for v in d["t2m"]     if v is not None), default=0.0)
         w850_mean = _mean(d["w850_day"]) or 0.0
-        cloud_night = _mean(d["cloud_night"]) or 0.0
+        cloud_rfz = _mean(d["cloud_rfz"]) or 0.0
 
-        isotherm = _nighttime_isotherm(
-            _mean(d["t850_night"]),
-            _mean(d["t700_night"]),
-            _mean(d["t500_night"]),
-            _mean(d["gh850_night"]),
-            _mean(d["gh700_night"]),
-            _mean(d["gh500_night"]),
-        )
+        rfz_iso, rfz_hour = _best_isotherm(d["rfz_hourly"], find_min=True)
+        mlt_iso, mlt_hour = _best_isotherm(d["mlt_hourly"], find_min=False)
 
         result.append(_DayForecast(
             date=day_str,
@@ -227,38 +285,47 @@ def _build_forecast(lat: float, lon: float) -> list[_DayForecast]:
             temp_min=round(temp_min, 1),
             temp_max=round(temp_max, 1),
             wind_850hpa=round(w850_mean, 0),
-            nighttime_isotherm=isotherm,
-            night_cloud_pct=round(cloud_night, 0),
+            refreeze_isotherm=rfz_iso,
+            refreeze_hour=rfz_hour,
+            melt_isotherm=mlt_iso,
+            melt_hour=mlt_hour,
+            night_cloud_pct=round(cloud_rfz, 0),
             storm=snow_sum > 15 or gust_max > 80,
         ))
     return result
 
 
+def _fmt_iso(iso: str, hour: int | None) -> str:
+    """Format isotherm with its UTC hour: '2450m @03h', or '—' if n/a."""
+    if iso == "n/a":
+        return "—"
+    return f"{iso} @{hour:02d}h" if hour is not None else iso
+
+
 def _format_forecast_text(days: list[_DayForecast]) -> str:
     """Format forecast as compact text for LLM injection."""
     lines = [
-        "Date       | Snow(cm) | Gusts(km/h) | Wind@850hPa(km/h) | Night isotherm | Night cloud% | T min/max°C",
-        "-----------|----------|-------------|-------------------|----------------|--------------|------------",
+        "Date       | Snow(cm) | Gusts(km/h) | Wind@850hPa(km/h) | Refreeze 0°C (00-09) | Melt 0°C (07-23) | Night cloud% | T min/max°C",
+        "-----------|----------|-------------|-------------------|-----------------------|------------------|--------------|------------",
     ]
     for d in days:
         storm = " ⚠STORM" if d.storm else ""
         lines.append(
             f"{d.date} | {d.snowfall_cm:>8.1f} | {d.gusts_max:>11.0f} | "
-            f"{d.wind_850hpa:>17.0f} | {d.nighttime_isotherm:>14} | "
-            f"{d.night_cloud_pct:>12.0f} | {d.temp_min:>5.1f}/{d.temp_max:<5.1f}{storm}"
+            f"{d.wind_850hpa:>17.0f} | {_fmt_iso(d.refreeze_isotherm, d.refreeze_hour):>21} | "
+            f"{_fmt_iso(d.melt_isotherm, d.melt_hour):>16} | {d.night_cloud_pct:>12.0f} | "
+            f"{d.temp_min:>5.1f}/{d.temp_max:<5.1f}{storm}"
         )
     return "\n".join(lines)
 
 
 def _isotherm_above(isotherm: str, elevation_m: int | None) -> bool:
-    """Return True if the nighttime isotherm is above the given elevation."""
+    """Return True if the given isotherm altitude is above elevation_m."""
     if elevation_m is None or isotherm in ("n/a", ""):
         return False
     if isotherm.startswith(">"):
-        # isotherm is above the 700hPa level — almost certainly above any alpine summit
         return True
     if isotherm.startswith("<"):
-        # isotherm is below the 850hPa level — refreeze guaranteed at summit
         return False
     try:
         return int(isotherm.rstrip("m")) > elevation_m
@@ -272,26 +339,24 @@ def _table_row(d: _DayForecast, today_str: str, elevation_max: int | None = None
     date_cell = f"**{d.date}**" if d.date == today_str else d.date
     wind_cell = f"{d.wind_850hpa:.0f} km/h" if d.wind_850hpa > 0 else "—"
     cloud_cell = f"{d.night_cloud_pct:.0f}%" if d.night_cloud_pct >= 0 else "—"
-    iso_raw = d.nighttime_isotherm if d.nighttime_isotherm != "n/a" else "—"
-    # Flag when the isotherm is above the summit — no overnight refreeze
-    if _isotherm_above(d.nighttime_isotherm, elevation_max):
-        iso_cell = f"**{iso_raw} ⚠**"
-    else:
-        iso_cell = iso_raw
+    rfz_fmt  = _fmt_iso(d.refreeze_isotherm, d.refreeze_hour)
+    melt_fmt = _fmt_iso(d.melt_isotherm,     d.melt_hour)
+    rfz_cell  = f"**{rfz_fmt} ⚠**" if _isotherm_above(d.refreeze_isotherm, elevation_max) else rfz_fmt
     return (
         f"| {date_cell}{storm} "
         f"| {d.snowfall_cm:.1f} cm "
         f"| {d.gusts_max:.0f} km/h "
         f"| {wind_cell} "
-        f"| {iso_cell} "
+        f"| {rfz_cell} "
+        f"| {melt_fmt} "
         f"| {cloud_cell} "
         f"| {d.temp_min:.1f}/{d.temp_max:.1f}°C |"
     )
 
 
 _TABLE_HEADER = (
-    "| Date | Snow | Gusts | Wind ~1500m | Night isotherm | Night cloud | T min/max |\n"
-    "|------|------|-------|-------------|----------------|-------------|-----------|"
+    "| Date | Snow | Gusts | Wind ~1500m | Refreeze 0°C | Melt 0°C | Night cloud | T min/max |\n"
+    "|------|------|-------|-------------|--------------|----------|-------------|-----------|"
 )
 
 
@@ -307,61 +372,6 @@ def _format_ui_table(hist_days: list[_DayForecast], forecast_days: list[_DayFore
         parts.extend(_table_row(d, today_str, elevation_max) for d in forecast_days)
     return "\n".join(parts)
 
-
-def _fetch_historical_days(lat: float, lon: float, today: date, days: int = 7) -> list[_DayForecast]:
-    """
-    Fetch the past `days` days from the archive API as _DayForecast objects.
-    Pressure-level fields (isotherm, altitude wind, night cloud) are not available
-    from the archive and are set to sentinel values ("—" / -1).
-    """
-    start = (today - timedelta(days=days)).isoformat()
-    end   = (today - timedelta(days=1)).isoformat()
-
-    r = _session.get(
-        "https://archive-api.open-meteo.com/v1/archive",
-        params={
-            "latitude": lat,
-            "longitude": lon,
-            "start_date": start,
-            "end_date": end,
-            "daily": [
-                "snowfall_sum",
-                "precipitation_sum",
-                "windspeed_10m_max",
-                "windgusts_10m_max",
-                "temperature_2m_min",
-                "temperature_2m_max",
-            ],
-            "timezone": "UTC",
-        },
-        timeout=20,
-    )
-    r.raise_for_status()
-    d = r.json().get("daily", {})
-    dates = d.get("time", [])
-
-    result = []
-    for i, day_str in enumerate(dates):
-        snow  = d["snowfall_sum"][i]     or 0.0
-        prec  = d["precipitation_sum"][i] or 0.0
-        wind  = d["windspeed_10m_max"][i] or 0.0
-        gust  = d["windgusts_10m_max"][i] or 0.0
-        t_min = d["temperature_2m_min"][i] or 0.0
-        t_max = d["temperature_2m_max"][i] or 0.0
-        result.append(_DayForecast(
-            date=day_str,
-            precip_mm=round(prec, 1),
-            snowfall_cm=round(snow, 1),
-            wind_10m_max=round(wind, 0),
-            gusts_max=round(gust, 0),
-            temp_min=round(t_min, 1),
-            temp_max=round(t_max, 1),
-            wind_850hpa=0.0,        # not available from archive
-            nighttime_isotherm="n/a",
-            night_cloud_pct=-1,     # sentinel: not available
-            storm=snow > 15 or gust > 80,
-        ))
-    return result
 
 
 def _fetch_historical_text(lat: float, lon: float, today: date, days_back: int = 90) -> str:
@@ -416,17 +426,15 @@ def fetch_weather(route: dict, today: date) -> "WeatherSummary | None":
     lat, lon = coords
     errors: list[str] = []
 
+    hist_days:     list[_DayForecast] = []
     forecast_days: list[_DayForecast] = []
     try:
-        forecast_days = _build_forecast(lat, lon)
+        all_days = _build_all_days(lat, lon, past_days=7)
+        today_str_split = today.isoformat()
+        hist_days     = [d for d in all_days if d.date <  today_str_split]
+        forecast_days = [d for d in all_days if d.date >= today_str_split]
     except Exception as e:
-        errors.append(f"Forecast unavailable: {e}")
-
-    hist_days: list[_DayForecast] = []
-    try:
-        hist_days = _fetch_historical_days(lat, lon, today)
-    except Exception as e:
-        errors.append(f"Recent history unavailable: {e}")
+        errors.append(f"Weather unavailable: {e}")
 
     historical_text = ""
     try:
