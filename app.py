@@ -230,7 +230,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab1, tab2 = st.tabs(["Find routes", "Analyse a route"])
+tab1, tab2, tab3 = st.tabs(["Find routes", "Analyse a route", "About"])
 
 # ===========================================================================
 # TAB 1 — Find routes: map + search + triage cards
@@ -689,3 +689,59 @@ with tab2:
             "Source topos and trip reports linked above are the authoritative references. "
             "This AI analysis may be incomplete or wrong — verify conditions independently before your climb."
         )
+
+# ===========================================================================
+# TAB 3 — About
+# ===========================================================================
+with tab3:
+    st.markdown("""
+## About this tool
+
+Mountaineering is a domain where LLMs are particularly unreliable on their own. Most of the real
+knowledge — what a route actually feels like, how it comes into condition, what gear works — lives
+in guidebooks behind paywalls, in conversations between guides and experienced alpinists, in hut
+beta that never gets written down. What *does* make it online is disproportionately noise: forum
+threads from beginners asking whether a serious route is "doable in trail runners," trip reports
+from people who turned around halfway and reported confidently anyway. An LLM trained on that
+corpus will pattern-match to the noise more than the signal.
+
+At the same time, putting together a well-informed go/no-go assessment for a route is genuinely
+time-consuming. You need to cross-reference the grade against your level, read recent conditions
+reports, check the forecast, look at the past week's freeze-thaw cycle to judge snow stability —
+all from separate sources, none of which talk to each other.
+
+This tool addresses both problems. It combines deterministic filtering with real data and a
+narrowly-scoped LLM call to make that preparation fast and structured.
+
+---
+
+### How it works
+
+Routes are filtered against your stated limits using an explicit grading model — the LLM plays
+no role here. French rock, alpine (F→ABO), ice (WI), and mixed (M) grades are all handled, with
+scoring that accounts for partial matches and penalises routes that are hard across multiple
+dimensions simultaneously. Only routes that survive this filter reach the analysis stage.
+
+For each candidate route, the tool fetches:
+
+- **Conditions reports and outing history** from [Camptocamp](https://www.camptocamp.org), the
+  main community platform for Alpine routes. Reports are read by Claude and summarised.
+- **Weather data** from [Open-Meteo](https://open-meteo.com): a 7-day forecast and 7-day
+  historical record, both including pressure-level data (850/700/500 hPa) used to compute the
+  0°C isotherm — the freeze line that determines overnight consolidation and afternoon wet-snow risk.
+
+Claude synthesises these inputs into a per-route conditions assessment: recent activity, weather
+trend, freeze quality, any storm flags.
+
+**Tech stack:** Python · Streamlit · Anthropic Claude API · Camptocamp (unofficial API) · Open-Meteo
+
+---
+
+### A note on scope
+
+This is a personal project, not a public tool — partly by design. The consequences of a route
+recommender giving confident but wrong advice to someone underqualified for a serious alpine
+objective are severe. The safety margin here is that the tool is used by someone who already
+knows what they're doing and can sanity-check the output; it's not designed to replace that judgment.
+""")
+
