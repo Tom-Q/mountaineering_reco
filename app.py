@@ -684,6 +684,31 @@ with tab2:
                     st.caption(wx.historical_text)
                 if wx.fetch_errors:
                     st.warning("  \n".join(wx.fetch_errors))
+                for bulletin in wx.avalanche_bulletins:
+                    st.divider()
+                    if bulletin.fetch_error:
+                        st.warning(f"Avalanche bulletin ({bulletin.massif_name}): {bulletin.fetch_error}")
+                    else:
+                        _DANGER_COLORS = {1: "green", 2: "blue", 3: "orange", 4: "red", 5: "red"}
+                        _DANGER_LABELS = {1: "Low", 2: "Limited", 3: "Considerable", 4: "High", 5: "Very High"}
+                        lvl = bulletin.danger_level
+                        color = _DANGER_COLORS.get(lvl, "gray")
+                        label = _DANGER_LABELS.get(lvl, str(lvl))
+                        st.markdown(
+                            f"**Avalanche bulletin — {bulletin.massif_name}**  "
+                            f"·  Danger :{color}[**{lvl}/5 — {label}**]  "
+                            f"·  Valid until {bulletin.valid_until}"
+                        )
+                        if bulletin.aspects_at_risk:
+                            st.caption("Aspects at risk: " + ", ".join(bulletin.aspects_at_risk))
+                        if bulletin.summary:
+                            st.markdown(bulletin.summary)
+                        if bulletin.image_meteo or bulletin.image_7days:
+                            img_cols = st.columns(2)
+                            if bulletin.image_meteo:
+                                img_cols[0].image(bulletin.image_meteo, caption="Météo overview", width="stretch")
+                            if bulletin.image_7days:
+                                img_cols[1].image(bulletin.image_7days, caption="Last 7 days", width="stretch")
         st.markdown(result["text"])
         st.caption(
             "Source topos and trip reports linked above are the authoritative references. "

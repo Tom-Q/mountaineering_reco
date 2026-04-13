@@ -7,8 +7,6 @@ Fetches a 7-day forecast and a 90-day historical summary from Open-Meteo
 The forecast uses hourly data aggregated to daily values, including pressure-level
 variables (850/700 hPa) for altitude wind and nighttime 0°C isotherm computation.
 
-TODO: get avalanche reports, meteo france has some (requires registration); look into avalanche reports
-for switzerland and italy.
 TODO: consider whether it's worth getting a more precise isotherm estimate by including more hPa ranges.
 Additionally, consider: is hPa temp a good enough approximation for isotherm?
 """
@@ -31,6 +29,7 @@ class WeatherSummary:
     historical_text: str       # pre-formatted for LLM injection
     ui_table: str              # markdown table for display in the app
     fetch_errors: list[str] = field(default_factory=list)
+    avalanche_bulletins: list = field(default_factory=list)  # list[AvalancheBulletin]
 
 
 @dataclass
@@ -442,6 +441,13 @@ def fetch_weather(route: dict, today: date) -> "WeatherSummary | None":
     except Exception as e:
         errors.append(f"Historical data unavailable: {e}")
 
+    from src.avalanche import fetch_avalanche_bulletin  # local import avoids circular dep
+    avalanche_bulletins = []
+    try:
+        avalanche_bulletins = fetch_avalanche_bulletin(lat, lon)
+    except Exception as e:
+        errors.append(f"Avalanche bulletin unavailable: {e}")
+
     today_str = today.isoformat()
     elevation_max = route.get("elevation_max")
     elev_int = int(elevation_max) if elevation_max is not None else None
@@ -452,4 +458,5 @@ def fetch_weather(route: dict, today: date) -> "WeatherSummary | None":
         historical_text=historical_text,
         ui_table=_format_ui_table(hist_days, forecast_days, today_str, elev_int),
         fetch_errors=errors,
+        avalanche_bulletins=avalanche_bulletins,
     )

@@ -40,10 +40,19 @@ If weather data was provided, add this section after "Relative to your level". I
 
 Summarise in 4–6 bullets:
 - **Storm days**: call out any days with the ⚠STORM flag by date. If no storm days, say so briefly.
-- **Nighttime refreeze**: report the isotherm values from the table as-is. Notation: a plain value like "2450m" means the 0°C line is at that altitude; "**>3100m ⚠**" means the isotherm is above the highest measured level (~3100m) so the exact value is unknown but conditions are warm above 3100m; "<1580m" means refreezing extends below the lowest measured level (~1580m). Do not infer stability conclusions — just report the values and flag the ⚠ rows.
-- **Night cloud cover**: cloudy nights (>60%) inhibit radiative cooling and prevent refreezing even when temperatures are cold. Combine with the isotherm: cold but cloudy = uncertain refreeze.
+- **Refreeze 0°C (00–09 min)**: the lowest altitude the 0°C line reaches during the coldest hours. A low value (well below the summit) means solid overnight refreeze. A "**⚠**" flag means the isotherm stayed above the summit — no refreeze. Notation: "2450m" = interpolated altitude; ">5500m" = isotherm above the highest measured level; "<760m" = below the lowest level.
+- **Melt 0°C (07–23 max)**: the highest altitude the 0°C line reaches during the warmest part of the day. When this is above the summit, the entire route surface can soften. Useful context for afternoon conditions and wet-snow avalanche risk.
+- **Night cloud cover**: cloudy nights (>60%) inhibit radiative cooling and can prevent refreezing even when temperatures are cold. Combine with Refreeze 0°C: cold isotherm but cloudy = uncertain refreeze.
 - **Altitude wind (~1500m)**: flag days with sustained Wind@850hPa above 50 km/h. This is more relevant than valley gusts for exposed ridges and couloirs.
 - **Snowfall trend**: note expected snowfall over the week. Fresh snow above 20 cm in a single day is a stability concern.
 - **Recent snowpack**: based on the historical summary, note whether large snowfall events in the past 90 days are relevant to current stability.
 
 Be direct and specific about dates. If fetch errors are listed, acknowledge what is missing.
+
+## Avalanche conditions (conditional — include only if an `## Avalanche bulletin` block appears in the input)
+
+If avalanche bulletin data was provided, add this section after Weather outlook. Summarise in 3–5 bullets:
+- **Danger level**: state the level (1–5) and its label (Low / Limited / Considerable / High / Very High). Note any altitude split (e.g. "3/5 Considerable above 2500m, 2/5 Limited below").
+- **Aspects and terrain at risk**: which slope orientations are flagged. Relate this to the route's aspects where possible (e.g. "the approach couloir faces NE, which is listed as at risk").
+- **Avalanche problems**: summarise the main hazard types from the bulletin (wet snow, wind slab, persistent weak layer, glide avalanche, etc.) and the altitudes concerned.
+- **Go/no-go relevance**: given the route's aspect and elevation profile, state plainly whether the bulletin is a concern for this specific objective or not.

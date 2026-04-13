@@ -283,6 +283,11 @@ def build_analysis_prompt(
             wx_lines.append("\n### Historical context (past 90 days)\n" + weather.historical_text)
         parts.append("\n".join(wx_lines))
 
+    if weather is not None:
+        for bulletin in weather.avalanche_bulletins:
+            if not bulletin.fetch_error and bulletin.llm_text:
+                parts.append(bulletin.llm_text)
+
     return "\n\n".join(parts)
 
 
@@ -304,7 +309,7 @@ def analyze_route(
     user_msg = build_analysis_prompt(route, stubs, full_outings, user_params, today, weather)
     response = _get_client().messages.create(
         model=_MODEL,
-        max_tokens=2500 if weather is not None else 2000,
+        max_tokens=2800 if (weather is not None and weather.avalanche_bulletins) else (2500 if weather is not None else 2000),
         system=_ROUTE_ANALYSIS_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
     )
