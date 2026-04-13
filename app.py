@@ -684,6 +684,14 @@ with tab2:
                     st.caption(wx.historical_text)
                 if wx.fetch_errors:
                     st.warning("  \n".join(wx.fetch_errors))
+                if not wx.avalanche_bulletins:
+                    st.divider()
+                    st.caption(
+                        "⚠ No integrated avalanche bulletin for this area. "
+                        "Check your local/regional avalanche service before heading out "
+                        "(e.g. [avalanche.org](https://www.avalanches.org), "
+                        "SLF, AINEVA, Météo-France, or the relevant national service)."
+                    )
                 for bulletin in wx.avalanche_bulletins:
                     st.divider()
                     if bulletin.fetch_error:
