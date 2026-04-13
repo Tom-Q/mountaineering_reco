@@ -762,11 +762,18 @@ For each candidate route, the tool fetches:
 - **Weather data** from [Open-Meteo](https://open-meteo.com): a 7-day forecast and 7-day
   historical record, both including pressure-level data (850/700/500 hPa) used to compute the
   0°C isotherm — the freeze line that determines overnight consolidation and afternoon wet-snow risk.
+- **Avalanche bulletins** from multiple official services, matched to the route's coordinates:
+  - [Météo-France BRA](https://meteofrance.fr) for all 35 French massifs
+  - [SLF](https://www.slf.ch) (Swiss avalanche bulletin) for Switzerland
+  - [EUREGIO](https://avalanche.report) for South Tyrol, Trentino, and Tyrol (Austria)
+  - [AINEVA](https://www.aineva.it)-affiliated regional feeds for Valle d'Aosta, Piemonte, and Lombardia (seasonal — active roughly November to April)
+  - Carinthia (Austria) via the EAWS static feed
+  - A warning is shown when no integrated bulletin is available for the route's region (e.g. Slovenia, Norway, Spanish Pyrenees) — consult your local service in those cases.
 
 Claude synthesises these inputs into a per-route conditions assessment: recent activity, weather
-trend, freeze quality, any storm flags.
+trend, freeze quality, avalanche danger and problem types, any storm flags.
 
-**Tech stack:** Python · Streamlit · Anthropic Claude API · Camptocamp (unofficial API) · Open-Meteo
+**Tech stack:** Python · Streamlit · Anthropic Claude API · Camptocamp (unofficial API) · Open-Meteo · Météo-France API · SLF API · EAWS / avalanche.report
 
 ---
 
