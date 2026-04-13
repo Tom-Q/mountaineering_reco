@@ -1,16 +1,18 @@
 """
 Avalanche bulletin integration.
 
-Phase 1: Météo-France BRA (Bulletin de Risque d'Avalanche) for French massifs.
-Requires METEOFRANCE_API_KEY in .env (valid ~2 weeks, manually renewed).
+Sources:
+- Météo-France BRA (French massifs) — requires METEOFRANCE_API_KEY in .env
+- EAWS CAAMLv6 feeds (Switzerland, Italy, Austria) — public, no auth
 
-Geographic lookup: point-in-polygon against the massif GeoJSON in the repo
-root (liste-massifs.geojson). No external GIS library — uses ray-casting for
-MultiPolygon containment.
+Geographic lookup for France: point-in-polygon against liste-massifs.geojson.
+Geographic lookup for EAWS: micro-region GeoJSON files from regions.avalanches.org,
+fetched at runtime and cached for 7 days.
 """
 
 import json
 import os
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,21 +27,81 @@ _MF_BRA_URL = "https://public-api.meteofrance.fr/public/DPBRA/v1/massif/BRA"
 _MF_IMAGE_URL = "https://public-api.meteofrance.fr/public/DPBRA/v1/massif/image"
 _MASSIF_GEOJSON = Path(__file__).parent.parent / "liste-massifs.geojson"
 
-# Bulletins are issued once or twice a day; cache for 6h.
-_session = requests_cache.CachedSession("avalanche_cache", expire_after=3600 * 6)
+_EAWS_MICRO_REGIONS_BASE = "https://regions.avalanches.org/micro-regions"
 
-_DANGER_LABELS = {
-    1: "Low",
-    2: "Limited",
-    3: "Considerable",
-    4: "High",
-    5: "Very High",
+# Two cache TTLs: short for bulletins (issued 1–2× per day), long for region geometry (rarely changes)
+_bulletin_session = requests_cache.CachedSession("avalanche_cache", expire_after=3600 * 6)
+_region_session   = requests_cache.CachedSession("eaws_regions_cache", expire_after=3600 * 24 * 7)
+
+_DANGER_LABELS = {1: "Low", 2: "Limited", 3: "Considerable", 4: "High", 5: "Very High"}
+
+# CAAMLv6 text values → integer danger level
+_CAAML_DANGER = {
+    "low": 1, "limited": 2, "considerable": 3, "high": 4, "very_high": 5,
+    "no_snow": 0, "no_rating": 0,
 }
+
+# ---------------------------------------------------------------------------
+# EAWS provider definitions
+# ---------------------------------------------------------------------------
+# Each entry: (provider_codes_for_geo_lookup, bulletin_feed_url, display_name)
+# provider_codes must match the filenames at regions.avalanches.org/micro-regions/
+_EAWS_PROVIDERS = [
+    # EUREGIO: South Tyrol (IT-32-BZ) + Trentino (IT-32-TN) + Tyrol (AT-07)
+    (
+        ["IT-32-BZ", "IT-32-TN", "AT-07"],
+        "https://static.avalanche.report/bulletins/latest/EUREGIO_en_CAAMLv6.json",
+        "EUREGIO",
+    ),
+    # Valle d'Aosta
+    (
+        ["IT-23"],
+        "https://static.avalanche.report/bulletins/latest/IT-23_en_CAAMLv6.json",
+        "Valle d'Aosta",
+    ),
+    # Piemonte
+    (
+        ["IT-21"],
+        "https://static.avalanche.report/bulletins/latest/IT-21_en_CAAMLv6.json",
+        "Piemonte",
+    ),
+    # Lombardia (Valtellina, Valchiavenna)
+    (
+        ["IT-25"],
+        "https://static.avalanche.report/bulletins/latest/IT-25_en_CAAMLv6.json",
+        "Lombardia",
+    ),
+    # Switzerland (SLF)
+    (
+        ["CH"],
+        "https://aws.slf.ch/api/bulletin/caaml/en/json",
+        "Switzerland (SLF)",
+    ),
+    # Carinthia
+    (
+        ["AT-02"],
+        "https://static.avalanche.report/bulletins/latest/AT-02_en_CAAMLv6.json",
+        "Carinthia",
+    ),
+    # Salzburg
+    (
+        ["AT-05"],
+        "https://static.avalanche.report/bulletins/latest/AT-05_en_CAAMLv6.json",
+        "Salzburg",
+    ),
+    # Styria
+    (
+        ["AT-06"],
+        "https://static.avalanche.report/bulletins/latest/AT-06_en_CAAMLv6.json",
+        "Styria",
+    ),
+]
 
 
 @dataclass
 class AvalancheBulletin:
-    source: str                        # "meteofrance"
+    source: str                        # "meteofrance" | "eaws"
+    provider_name: str                 # human-readable: "Météo-France", "EUREGIO", "Switzerland (SLF)", …
     massif_name: str
     danger_level: int                  # 1–5 max danger for the day
     danger_level_lo: int | None        # danger below split altitude
@@ -47,12 +109,12 @@ class AvalancheBulletin:
     danger_split_altitude: int | None  # metres; None if uniform danger
     valid_until: str                   # ISO datetime (truncated to minute)
     aspects_at_risk: list[str]         # e.g. ["N", "NE", "E", "NW"]
-    summary: str                       # RESUME CDATA (concise)
-    full_text: str                     # STABILITE/TEXTE CDATA (detailed, truncated)
+    summary: str                       # concise summary
+    full_text: str                     # detailed narrative (truncated for LLM)
     llm_text: str                      # pre-formatted block for LLM injection
     ui_md: str                         # markdown for Streamlit display
-    image_meteo: bytes | None = None   # apercu-meteo PNG bytes
-    image_7days: bytes | None = None   # sept-derniers-jours PNG bytes
+    image_meteo: bytes | None = None   # MF only: apercu-meteo PNG
+    image_7days: bytes | None = None   # MF only: sept-derniers-jours PNG
     fetch_error: str | None = None
 
 
@@ -61,7 +123,6 @@ class AvalancheBulletin:
 # ---------------------------------------------------------------------------
 
 def _ray_cast(lat: float, lon: float, ring: list) -> bool:
-    """Return True if (lon, lat) is inside the polygon ring."""
     inside = False
     n = len(ring)
     j = n - 1
@@ -77,7 +138,6 @@ def _ray_cast(lat: float, lon: float, ring: list) -> bool:
 
 
 def _point_in_polygon(lat: float, lon: float, rings: list) -> bool:
-    """Polygon = outer ring + optional holes."""
     if not rings:
         return False
     if not _ray_cast(lat, lon, rings[0]):
@@ -98,11 +158,14 @@ def _point_in_multipolygon(lat: float, lon: float, geometry: dict) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# French massif lookup (local GeoJSON)
+# ---------------------------------------------------------------------------
+
 _massif_features: list | None = None
 
 
 def _find_massif(lat: float, lon: float) -> dict | None:
-    """Return the massif properties for the given point, or None if outside France."""
     global _massif_features
     if _massif_features is None:
         with open(_MASSIF_GEOJSON, encoding="utf-8") as f:
@@ -114,7 +177,236 @@ def _find_massif(lat: float, lon: float) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# XML parsing helpers
+# EAWS micro-region lookup (fetched + cached)
+# ---------------------------------------------------------------------------
+
+_micro_region_cache: dict[str, list] = {}
+
+
+def _load_micro_regions(provider_code: str) -> list:
+    """
+    Fetch and cache the micro-region GeoJSON features for a provider code.
+    Returns an empty list on network/parse error.
+    """
+    if provider_code in _micro_region_cache:
+        return _micro_region_cache[provider_code]
+
+    url = f"{_EAWS_MICRO_REGIONS_BASE}/{provider_code}_micro-regions.geojson.json"
+    try:
+        r = _region_session.get(url, timeout=15)
+        r.raise_for_status()
+        features = r.json().get("features", [])
+    except Exception:
+        features = []
+
+    _micro_region_cache[provider_code] = features
+    return features
+
+
+def _feature_region_id(feature: dict) -> str | None:
+    """Extract the region ID from a micro-region GeoJSON feature."""
+    props = feature.get("properties", {})
+    return props.get("id") or props.get("ID") or feature.get("id")
+
+
+def _find_eaws_region(lat: float, lon: float, provider_codes: list[str]) -> tuple[str, str] | None:
+    """
+    Search provider_codes in order. Returns (regionID, provider_code) for the
+    first micro-region polygon containing (lat, lon), or None.
+    """
+    for code in provider_codes:
+        for feature in _load_micro_regions(code):
+            geom = feature.get("geometry")
+            if geom and _point_in_multipolygon(lat, lon, geom):
+                region_id = _feature_region_id(feature)
+                if region_id:
+                    return region_id, code
+    return None
+
+
+# ---------------------------------------------------------------------------
+# CAAMLv6 fetch + parse
+# ---------------------------------------------------------------------------
+
+def _fetch_caaml_bulletins(feed_url: str) -> list[dict]:
+    """
+    Fetch a CAAMLv6 JSON feed and return the bulletins list.
+    Handles both {"bulletins": [...]} and bare [...] top-level shapes.
+    Returns [] on error.
+    """
+    try:
+        r = _bulletin_session.get(feed_url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, list):
+            return data
+        return data.get("bulletins", [])
+    except Exception:
+        return []
+
+
+def _bulletin_for_region(bulletins: list[dict], region_id: str) -> dict | None:
+    for b in bulletins:
+        for reg in b.get("regions", []):
+            if reg.get("regionID") == region_id:
+                return b
+    return None
+
+
+def _parse_caaml_danger(ratings: list[dict]) -> tuple[int, int | None, int | None, int | None]:
+    """
+    Parse dangerRatings list into (max_danger, lo_danger, hi_danger, split_alt).
+
+    Returns uniform danger if no elevation split, or split values if two distinct
+    ratings with elevation bounds exist. Prefers all_day over earlier/later.
+    """
+    # Prefer all_day; fall back to any period
+    preferred = [r for r in ratings if r.get("validTimePeriod") == "all_day"] or ratings
+
+    # Collect (danger_int, has_upper_bound, has_lower_bound, altitude)
+    parsed = []
+    for r in preferred:
+        val = _CAAML_DANGER.get(r.get("mainValue", ""), 0)
+        elev = r.get("elevation", {})
+        upper = elev.get("upperBound")  # e.g. "2500" → below this altitude
+        lower = elev.get("lowerBound")  # e.g. "2500" → above this altitude
+        parsed.append((val, upper, lower))
+
+    if not parsed:
+        return 0, None, None, None
+
+    max_danger = max(v for v, _, _ in parsed)
+
+    # Detect altitude split: one entry with upperBound and one with lowerBound
+    upper_entries = [(v, u) for v, u, l in parsed if u is not None and l is None]
+    lower_entries = [(v, l) for v, u, l in parsed if l is not None and u is None]
+
+    if upper_entries and lower_entries:
+        lo_val = upper_entries[0][0]   # danger for elevations below the split
+        hi_val = lower_entries[0][0]   # danger for elevations above the split
+        # The split altitude appears in both entries and should be the same value
+        split = int(upper_entries[0][1])
+        if lo_val != hi_val:
+            return max_danger, lo_val, hi_val, split
+
+    return max_danger, None, None, None
+
+
+def _parse_caaml_aspects(problems: list[dict]) -> list[str]:
+    """Union of all aspects across avalanche problems, in compass order."""
+    order = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    seen = set()
+    for p in problems:
+        seen.update(p.get("aspects", []))
+    return [a for a in order if a in seen]
+
+
+def _parse_caaml_problems_text(problems: list[dict]) -> str:
+    """Format avalanche problems as a readable list for the LLM."""
+    lines = []
+    for p in problems:
+        ptype = p.get("problemType", "").replace("_", " ")
+        aspects = ", ".join(p.get("aspects", []))
+        elev = p.get("elevation") or {}
+        if elev.get("lowerBound"):
+            elev_str = f"above {elev['lowerBound']}m"
+        elif elev.get("upperBound"):
+            elev_str = f"below {elev['upperBound']}m"
+        else:
+            elev_str = "all elevations"
+        stability = p.get("snowpackStability", "")
+        size = p.get("avalancheSize")
+        parts = [f"{ptype} ({elev_str}"]
+        if aspects:
+            parts[0] += f", aspects: {aspects}"
+        parts[0] += ")"
+        if stability:
+            parts.append(f"stability: {stability.replace('_', ' ')}")
+        if size:
+            parts.append(f"size {size}/5")
+        lines.append(", ".join(parts))
+    return "; ".join(lines) if lines else ""
+
+
+def _strip_html(text: str) -> str:
+    """Remove HTML tags and collapse whitespace."""
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _parse_caaml_bulletin(bulletin: dict, region_name: str, provider_name: str) -> AvalancheBulletin:
+    ratings  = bulletin.get("dangerRatings", [])
+    problems = bulletin.get("avalancheProblems", [])
+
+    danger_max, danger_lo, danger_hi, split_alt = _parse_caaml_danger(ratings)
+    aspects   = _parse_caaml_aspects(problems)
+    problems_text = _parse_caaml_problems_text(problems)
+
+    # Summary: use highlights; fall back to avalanche activity comment
+    highlights = _strip_html((bulletin.get("highlights") or "").strip())
+    activity   = (bulletin.get("avalancheActivity") or {})
+    act_comment = _strip_html((activity.get("comment") or activity.get("highlights") or "").strip())
+    snowpack    = _strip_html(((bulletin.get("snowpackStructure") or {}).get("comment") or "").strip())
+
+    summary = highlights or act_comment[:300] or "—"
+
+    full_parts = [t for t in [act_comment, snowpack] if t]
+    full_text = "\n\n".join(full_parts)
+
+    valid_until = (bulletin.get("validTime") or {}).get("endTime", "")[:16]
+
+    b = AvalancheBulletin(
+        source="eaws",
+        provider_name=provider_name,
+        massif_name=region_name,
+        danger_level=danger_max,
+        danger_level_lo=danger_lo,
+        danger_level_hi=danger_hi,
+        danger_split_altitude=split_alt,
+        valid_until=valid_until,
+        aspects_at_risk=aspects,
+        summary=summary,
+        full_text=full_text,
+        llm_text="",
+        ui_md="",
+    )
+    b.llm_text = _build_llm_text(b)
+    b.ui_md    = _build_ui_md(b)
+
+    # Append problems list to LLM text if available
+    if problems_text:
+        b.llm_text += f"\n\nAvalanche problems: {problems_text}"
+
+    return b
+
+
+def fetch_eaws_bulletin(lat: float, lon: float) -> AvalancheBulletin | None:
+    """
+    Find and return the EAWS bulletin for the given coordinates, or None.
+    Tries providers in order; returns the first successful match.
+    """
+    for provider_codes, feed_url, display_name in _EAWS_PROVIDERS:
+        result = _find_eaws_region(lat, lon, provider_codes)
+        if result is None:
+            continue
+        region_id, _ = result
+        bulletins = _fetch_caaml_bulletins(feed_url)
+        if not bulletins:
+            continue
+        bulletin = _bulletin_for_region(bulletins, region_id)
+        if bulletin is None:
+            continue
+        # Use the region name from the bulletin if available
+        region_name = next(
+            (r["name"] for r in bulletin.get("regions", []) if r.get("regionID") == region_id),
+            region_id,
+        )
+        return _parse_caaml_bulletin(bulletin, region_name, display_name)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# XML parsing helpers (MF BRA)
 # ---------------------------------------------------------------------------
 
 def _text(elem) -> str:
@@ -129,11 +421,11 @@ def _parse_aspects(pente_elem) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Text formatters
+# Text formatters (source-agnostic)
 # ---------------------------------------------------------------------------
 
-def _danger_str_short(b: "AvalancheBulletin") -> str:
-    if b.danger_split_altitude and b.danger_level_lo and b.danger_level_hi:
+def _danger_str_short(b: AvalancheBulletin) -> str:
+    if b.danger_split_altitude and b.danger_level_lo is not None and b.danger_level_hi is not None:
         return (
             f"{b.danger_level_hi}/5 ({_DANGER_LABELS.get(b.danger_level_hi, '')}) "
             f"above {b.danger_split_altitude}m, "
@@ -143,11 +435,12 @@ def _danger_str_short(b: "AvalancheBulletin") -> str:
     return f"{b.danger_level}/5 ({lbl})"
 
 
-def _build_llm_text(b: "AvalancheBulletin") -> str:
+def _build_llm_text(b: AvalancheBulletin) -> str:
     aspects = ", ".join(b.aspects_at_risk) if b.aspects_at_risk else "not specified"
+    source_label = b.provider_name or b.source
     lines = [
-        "## Avalanche bulletin (Météo-France)",
-        f"Massif: {b.massif_name}  |  Danger: {_danger_str_short(b)}  |  Valid until: {b.valid_until}",
+        f"## Avalanche bulletin ({source_label})",
+        f"Region: {b.massif_name}  |  Danger: {_danger_str_short(b)}  |  Valid until: {b.valid_until}",
         f"Aspects at risk: {aspects}",
         "",
         f"Summary: {b.summary}",
@@ -157,8 +450,8 @@ def _build_llm_text(b: "AvalancheBulletin") -> str:
     return "\n".join(lines)
 
 
-def _build_ui_md(b: "AvalancheBulletin") -> str:
-    if b.danger_split_altitude and b.danger_level_lo and b.danger_level_hi:
+def _build_ui_md(b: AvalancheBulletin) -> str:
+    if b.danger_split_altitude and b.danger_level_lo is not None and b.danger_level_hi is not None:
         danger_md = (
             f"**{b.danger_level_hi}/5** above {b.danger_split_altitude}m, "
             f"**{b.danger_level_lo}/5** below"
@@ -167,9 +460,10 @@ def _build_ui_md(b: "AvalancheBulletin") -> str:
         lbl = _DANGER_LABELS.get(b.danger_level, "")
         danger_md = f"**{b.danger_level}/5 — {lbl}**"
 
+    source_label = b.provider_name or b.source
     aspects = ", ".join(b.aspects_at_risk) if b.aspects_at_risk else "—"
     return (
-        f"**Météo-France BRA — {b.massif_name}**  ·  Danger: {danger_md}  ·  "
+        f"**{source_label} — {b.massif_name}**  ·  Danger: {danger_md}  ·  "
         f"Valid until: {b.valid_until}\n\n"
         f"**Aspects at risk:** {aspects}\n\n"
         f"**Summary:** {b.summary}"
@@ -180,9 +474,9 @@ def _build_ui_md(b: "AvalancheBulletin") -> str:
 # Météo-France BRA fetch
 # ---------------------------------------------------------------------------
 
-def _error_bulletin(name: str, msg: str) -> AvalancheBulletin:
+def _error_bulletin(name: str, msg: str, provider: str = "Météo-France") -> AvalancheBulletin:
     return AvalancheBulletin(
-        source="meteofrance", massif_name=name,
+        source="meteofrance", provider_name=provider, massif_name=name,
         danger_level=0, danger_level_lo=None, danger_level_hi=None,
         danger_split_altitude=None, valid_until="", aspects_at_risk=[],
         summary="", full_text="", llm_text="", ui_md="",
@@ -191,13 +485,12 @@ def _error_bulletin(name: str, msg: str) -> AvalancheBulletin:
 
 
 def _fetch_bra_images(massif_code: int) -> tuple[bytes | None, bytes | None]:
-    """Fetch apercu-meteo and sept-derniers-jours PNGs. Best-effort."""
     if not _MF_API_KEY:
         return None, None
 
     def _get(endpoint: str) -> bytes | None:
         try:
-            r = _session.get(
+            r = _bulletin_session.get(
                 f"{_MF_IMAGE_URL}/{endpoint}",
                 params={"id-massif": massif_code},
                 headers={"apikey": _MF_API_KEY},
@@ -227,7 +520,7 @@ def fetch_bra_france(lat: float, lon: float) -> AvalancheBulletin | None:
         return _error_bulletin(name, "METEOFRANCE_API_KEY not set — BRA unavailable.")
 
     try:
-        r = _session.get(
+        r = _bulletin_session.get(
             _MF_BRA_URL,
             params={"id-massif": code, "format": "xml"},
             headers={"apikey": _MF_API_KEY},
@@ -265,7 +558,6 @@ def fetch_bra_france(lat: float, lon: float) -> AvalancheBulletin | None:
     danger_hi = int(risque2) if risque2.isdigit() else None
     split_alt = int(alt_str) if alt_str.isdigit() else None
 
-    # Flatten if no real split
     if not split_alt or danger_lo == danger_hi:
         danger_lo = danger_hi = split_alt = None
 
@@ -277,6 +569,7 @@ def fetch_bra_france(lat: float, lon: float) -> AvalancheBulletin | None:
 
     b = AvalancheBulletin(
         source="meteofrance",
+        provider_name="Météo-France",
         massif_name=massif_name,
         danger_level=danger_max,
         danger_level_lo=danger_lo,
@@ -296,14 +589,23 @@ def fetch_bra_france(lat: float, lon: float) -> AvalancheBulletin | None:
     return b
 
 
+# ---------------------------------------------------------------------------
+# Top-level dispatcher
+# ---------------------------------------------------------------------------
+
 def fetch_avalanche_bulletin(lat: float, lon: float) -> list[AvalancheBulletin]:
     """
     Return all applicable avalanche bulletins for the given coordinates.
-    Phase 1: Météo-France BRA only (French massifs).
-    Phase 2 will add EAWS feeds (Switzerland, Italy/Austria).
+    Bulletins from multiple providers are returned when a route is near a border.
     """
     bulletins = []
+
     fr = fetch_bra_france(lat, lon)
     if fr is not None:
         bulletins.append(fr)
+
+    eaws = fetch_eaws_bulletin(lat, lon)
+    if eaws is not None:
+        bulletins.append(eaws)
+
     return bulletins
