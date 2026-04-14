@@ -26,22 +26,27 @@ The architecture here is designed around these limitations:
 
 - **Backend / app:** Python, [Streamlit](https://streamlit.io)
 - **Route data:** Camptocamp API (unofficial, reverse-engineered from their frontend)
-- **Weather:** Open-Meteo (free, no API key required, good mountain forecasts)
+- **Weather:** Open-Meteo (free, no API key required)
+- **Avalanche bulletins:** Météo-France BRA (French massifs), SLF (Switzerland), EUREGIO / avalanche.report (South Tyrol, Trentino, Tyrol), and AINEVA-affiliated feeds for other Italian regions (seasonal)
 - **LLM:** Anthropic Claude API
 
 ## Project structure
 
 ```
-├── app.py                  # Streamlit entry point
+├── app.py                   # Streamlit entry point
 ├── src/
-│   ├── camptocamp.py       # Camptocamp API client
-│   ├── weather.py          # Open-Meteo integration
-│   ├── llm.py              # Anthropic API calls and prompt assembly
-│   └── grades.py           # Grade parsing, normalization, constraint logic
+│   ├── camptocamp.py        # Camptocamp API client
+│   ├── weather.py           # Open-Meteo integration
+│   ├── avalanche.py         # Avalanche bulletin integration (MF + EAWS)
+│   ├── llm.py               # Anthropic API calls and prompt assembly
+│   ├── grades.py            # Grade parsing, normalization, constraint logic
+│   └── search.py            # Route search and enrichment
 ├── prompts/
-│   └── recommendation.md   # Prompt templates
+│   ├── route_analysis.md    # Per-route analysis prompt
+│   └── route_summary.md     # One-line route summary prompt
+├── liste-massifs.geojson    # French massif polygons for avalanche geo-lookup
 └── data/
-    └── grade_systems.yaml  # Grade mappings and domain knowledge
+    └── grade_systems.yaml   # Grade mappings and domain knowledge
 ```
 
 ## Setup
@@ -51,7 +56,7 @@ git clone https://github.com/Tom-Q/mountaineering_reco
 cd mountaineering_reco
 pip install -r requirements.txt
 cp .env.example .env
-# Add your Anthropic API key to .env
+# Add ANTHROPIC_API_KEY and METEOFRANCE_API_KEY to .env
 streamlit run app.py
 ```
 

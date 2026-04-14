@@ -5,10 +5,7 @@ Fetches a 7-day forecast and a 90-day historical summary from Open-Meteo
 (free, no authentication required) for the route's coordinates.
 
 The forecast uses hourly data aggregated to daily values, including pressure-level
-variables (850/700 hPa) for altitude wind and nighttime 0°C isotherm computation.
-
-TODO: consider whether it's worth getting a more precise isotherm estimate by including more hPa ranges.
-Additionally, consider: is hPa temp a good enough approximation for isotherm?
+variables (925/850/700/600/500 hPa) for altitude wind and 0°C isotherm computation.
 """
 
 import json

@@ -97,6 +97,19 @@ _EAWS_PROVIDERS = [
     ),
 ]
 
+# ---------------------------------------------------------------------------
+# Regions not yet integrated
+# ---------------------------------------------------------------------------
+#
+# Slovenia — CAAMLv6, same format as above. Date-keyed URL (no confirmed /latest/ path):
+#   https://static.lawinen-warnung.eu/bulletins/2026-04-13/2026-04-13_SI_sl_SI_CAAMLv6.json
+# Micro-regions likely at: https://regions.avalanches.org/micro-regions/SI_micro-regions.geojson.json
+# Could be added to _EAWS_PROVIDERS once a stable /latest/ URL is confirmed.
+#
+# Spanish Pyrenees (AEMET) — not machine-readable; HTML bulletin only:
+#   https://www.aemet.es/es/eltiempo/prediccion/montana/boletin_peligro_aludes
+# Future: could link to this URL in the "no bulletin available" warning for routes in that area.
+
 
 @dataclass
 class AvalancheBulletin:

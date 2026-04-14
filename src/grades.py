@@ -4,13 +4,6 @@ Grade matching and route scoring.
 Routes from the Camptocamp API are scored against the user's search parameters.
 The LLM is not involved here — all filtering is deterministic.
 
-TODO: this is not transparent to the user.
-We might want to allow the user a fully
-deterministic search. camptocamp has a search page
-like this. Can we query it directly via the API?
-However camptocamp search (personal experience) 
-doesn't work.
-
 Scoring formula (per-route):
     P = total over-limit deviation
     N = total under-limit deviation
