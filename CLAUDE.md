@@ -25,7 +25,7 @@ This is a Streamlit app that recommends alpine climbing routes by combining dete
 2. `src/grades.py` deterministically filters routes against constraints using `grade_systems.yaml`
 3. `src/camptocamp.py` fetches candidate routes + conditions reports from Camptocamp (unofficial API)
 4. `src/weather.py` fetches forecasts from Open-Meteo
-5. `src/llm.py` calls Anthropic Claude with a prompt from `prompts/recommendation.md`
+5. `src/analysis.py` calls Anthropic Claude (Haiku) for route analysis and one-line summaries; `src/chat.py` runs the streaming agentic chat loop (Sonnet)
 6. Streamlit displays the plain-language recommendation
 
 **Grade systems (`grade_systems.yaml`):** Encodes ordered progressions for alpine (F→ABO), French rock (3→8a), ice (WI1→WI6), mixed (M1→M8), and ski (S1→S6). These are not interchangeable scales — a route's commitment and objective hazard matter beyond the technical grade.

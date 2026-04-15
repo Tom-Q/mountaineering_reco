@@ -1,40 +1,29 @@
 """
-LLM integration via the Anthropic API.
+Route analysis via the Anthropic API.
 
-The LLM's job is to synthesize free-text topo and conditions data into a
-structured route analysis. It is never responsible for grade filtering or
-route ranking — those are handled deterministically in src/grades.py.
+Handles the single-shot LLM call that synthesises topo and conditions data
+into a structured route analysis. Grade filtering and route ranking are not
+done here — those live in src/grades.py.
 """
 
-import os
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import anthropic
 import requests_cache
+
+from src.client import _get_client
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _MODEL = "claude-haiku-4-5-20251001"
-_CHAT_MODEL = "claude-sonnet-4-6"
 
-_client: anthropic.Anthropic | None = None
 _topo_session = requests_cache.CachedSession("topo_cache", expire_after=3600)
 _ROUTE_ANALYSIS_PROMPT = (_PROMPTS_DIR / "route_analysis.md").read_text()
 _ROUTE_SUMMARY_PROMPT  = (_PROMPTS_DIR / "route_summary.md").read_text()
-_ALPINIST_CHAT_SYSTEM  = (_PROMPTS_DIR / "alpinist_chat.md").read_text()
 
 # Skip non-text sources (videos, book purchase pages) that would return empty or
 # irrelevant content. "tvmountain" and "eosya" are video/subscription platforms.
 _SKIP_URL_PATTERNS = ["youtube.com", "youtu.be", "tvmountain", "eosya", "amazon", "fnac", "glenat"]
-_GOOD_RATINGS = {"good", "excellent"}
-
-
-def _get_client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    return _client
 
 
 # ---------------------------------------------------------------------------
@@ -67,50 +56,6 @@ def _fetch_topo_page(url: str) -> str | None:
         return text[:2000] if text else None
     except Exception:
         return None
-
-
-# ---------------------------------------------------------------------------
-# Outing selection
-# ---------------------------------------------------------------------------
-
-def _select_outing_ids(stubs: list[dict], today: date) -> set[int]:
-    """
-    Choose which outings to full-fetch from a list of stubs.
-
-    Selects:
-    - 2 most recent (for current conditions)
-    - Up to 3 from the same month ±30 days in prior years, preferring good/excellent
-      ratings (for seasonal reference)
-    """
-    dated: list[tuple[dict, date]] = []
-    for s in stubs:
-        raw = s.get("date_start")
-        if raw:
-            try:
-                dated.append((s, datetime.strptime(raw, "%Y-%m-%d").date()))
-            except ValueError:
-                pass
-
-    dated.sort(key=lambda x: x[1], reverse=True)
-
-    # 2 most recent regardless of season
-    recent_ids = {s["document_id"] for s, _ in dated[:2]}
-
-    # Up to 3 from same season (±30 days of today's date) in prior years,
-    # preferring good/excellent ratings
-    window = timedelta(days=30)
-    # Replace year with a fixed value on both sides so timedelta arithmetic
-    # compares only month+day, ignoring which year the outing was in.
-    today_no_year = today.replace(year=2000)
-    seasonal = [
-        (s, d) for s, d in dated
-        if d.year < today.year
-        and abs(d.replace(year=2000) - today_no_year) <= window
-    ]
-    seasonal.sort(key=lambda x: (x[0].get("condition_rating") not in _GOOD_RATINGS, -x[1].year))
-    seasonal_ids = {s["document_id"] for s, _ in seasonal[:3]}
-
-    return recent_ids | seasonal_ids
 
 
 # ---------------------------------------------------------------------------
@@ -324,111 +269,3 @@ def analyze_route(
         messages=[{"role": "user", "content": user_msg}],
     )
     return response.content[0].text.strip()
-
-
-# ---------------------------------------------------------------------------
-# Chat assistant
-# ---------------------------------------------------------------------------
-
-import json
-from collections.abc import Generator
-
-_MAX_CHAT_TURNS = 40
-
-
-def _format_profile(user_params: dict) -> str:
-    """Format the climber's grade profile as a system-prompt block."""
-    mapping = [
-        ("rock_onsight", "Rock onsight"),
-        ("rock_trad",    "Rock trad"),
-        ("ice_max",      "Ice"),
-        ("mixed_max",    "Mixed"),
-        ("alpine_max",   "Alpine"),
-    ]
-    lines = ["## Climber profile (baseline — user may adjust in conversation)"]
-    for key, label in mapping:
-        val = user_params.get(key)
-        if val:
-            lines.append(f"- {label}: {val}")
-    return "\n".join(lines)
-
-
-def chat_alpinist(
-    api_messages: list[dict],
-    today: date,
-    user_params: dict | None = None,
-) -> Generator[dict, None, None]:
-    """
-    Agentic chat loop with tool support. Yields typed event dicts:
-
-        {"type": "text",       "text": str}
-        {"type": "tool_start", "name": str, "input": dict}
-        {"type": "tool_end",   "name": str, "error": str | None}
-        {"type": "done",       "new_api_messages": list[dict]}
-
-    api_messages must already include the latest user message as the last
-    element. The caller appends new_api_messages to its own copy on "done".
-    user_params: sidebar grade profile dict; injected into the system prompt.
-    """
-    from src.tools import ALL_TOOLS, dispatch_tool
-
-    profile_block = _format_profile(user_params) + "\n\n" if user_params else ""
-    system = f"Today's date: {today.isoformat()}\n\n{profile_block}{_ALPINIST_CHAT_SYSTEM}"
-    working = list(api_messages[-_MAX_CHAT_TURNS:])
-    new_messages: list[dict] = []
-
-    while True:
-        with _get_client().messages.stream(
-            model=_CHAT_MODEL,
-            max_tokens=1024,
-            system=system,
-            messages=working,
-            tools=ALL_TOOLS,
-        ) as stream:
-            for chunk in stream.text_stream:
-                yield {"type": "text", "text": chunk}
-            final = stream.get_final_message()
-
-        # Serialise content blocks for session state storage
-        content_dicts = []
-        for block in final.content:
-            if block.type == "text":
-                content_dicts.append({"type": "text", "text": block.text})
-            elif block.type == "tool_use":
-                content_dicts.append({
-                    "type": "tool_use",
-                    "id": block.id,
-                    "name": block.name,
-                    "input": block.input,
-                })
-
-        assistant_msg = {"role": "assistant", "content": content_dicts}
-        working.append(assistant_msg)
-        new_messages.append(assistant_msg)
-
-        tool_blocks = [b for b in final.content if b.type == "tool_use"]
-        if not tool_blocks:
-            yield {"type": "done", "new_api_messages": new_messages}
-            return
-
-        # Dispatch each tool call and collect results
-        tool_results = []
-        for block in tool_blocks:
-            yield {"type": "tool_start", "name": block.name, "input": block.input}
-            error = None
-            try:
-                result = dispatch_tool(block.name, block.input)
-                result_str = json.dumps(result)
-            except Exception as e:
-                result_str = json.dumps({"error": str(e)})
-                error = str(e)
-            yield {"type": "tool_end", "name": block.name, "error": error}
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": result_str,
-            })
-
-        tool_msg = {"role": "user", "content": tool_results}
-        working.append(tool_msg)
-        new_messages.append(tool_msg)
