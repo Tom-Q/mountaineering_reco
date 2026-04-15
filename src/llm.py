@@ -293,6 +293,14 @@ def build_analysis_prompt(
     return "\n\n".join(parts)
 
 
+def _max_tokens_for_analysis(weather) -> int:
+    if weather is None:
+        return 2000
+    if weather.avalanche_bulletins:
+        return 2800
+    return 2500
+
+
 def analyze_route(
     route: dict,
     stubs: list[dict],
@@ -311,7 +319,7 @@ def analyze_route(
     user_msg = build_analysis_prompt(route, stubs, full_outings, user_params, today, weather)
     response = _get_client().messages.create(
         model=_MODEL,
-        max_tokens=2800 if (weather is not None and weather.avalanche_bulletins) else (2500 if weather is not None else 2000),
+        max_tokens=_max_tokens_for_analysis(weather),
         system=_ROUTE_ANALYSIS_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
     )

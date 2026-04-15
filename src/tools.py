@@ -244,7 +244,7 @@ def _handle_get_weather_forecast(tool_input: dict) -> dict:
     }
 
 
-def _route_summary(route: dict) -> dict:
+def route_summary(route: dict) -> dict:
     """Lean route dict for search results — enough for Claude to assess relevance."""
     return {
         "id": route.get("document_id"),
@@ -270,7 +270,7 @@ def _handle_search_routes_by_name(tool_input: dict) -> dict:
     return {
         "query": query,
         "count": len(routes),
-        "routes": [_route_summary(r) for r in routes],
+        "routes": [route_summary(r) for r in routes],
     }
 
 
@@ -288,7 +288,7 @@ def _handle_search_routes_by_area(tool_input: dict) -> dict:
         "area": {"lat_min": lat_min, "lat_max": lat_max, "lon_min": lon_min, "lon_max": lon_max},
         "total_available": total,
         "returned": len(routes),
-        "routes": [_route_summary(r) for r in routes],
+        "routes": [route_summary(r) for r in routes],
     }
 
 

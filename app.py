@@ -11,6 +11,7 @@ from collections import Counter
 from datetime import date, datetime
 
 from src.camptocamp import latlon_bbox_to_mercator, fetch_outing_stubs, fetch_outing_full, fetch_route, CHAMONIX_BBOX, search_routes_by_name
+from src.avalanche import DANGER_LABELS
 from src.llm import analyze_route, _select_outing_ids, summarize_route, chat_alpinist
 from src.weather import fetch_weather
 from src.search import fetch_page, enrich_routes, rerank
@@ -116,7 +117,7 @@ header[data-testid="stHeader"] { display: none; }
 section[data-testid="stSidebar"] { min-width: 350px !important; max-width: 350px !important; }
 </style>""", unsafe_allow_html=True)
 
-_GRADE_LABEL = {
+GRADE_LABEL = {
     "rock_onsight":   "Rock (onsight)",
     "ice_max":        "Ice",
     "mixed_max":      "Mixed",
@@ -127,12 +128,13 @@ _GRADE_LABEL = {
     "equipment_min":  "Equipment",
 }
 
-_ACTIVITIES = ["rock_climbing", "mountain_climbing", "ice_climbing", "snow_ice_mixed"]
-_PAGE_SIZE   = 100
-_TARGET      = 5    # number of routes to display
+DANGER_COLORS = {1: "green", 2: "blue", 3: "orange", 4: "red", 5: "red"}
 
+ACTIVITIES = ["rock_climbing", "mountain_climbing", "ice_climbing", "snow_ice_mixed"]
+PAGE_SIZE  = 100
+TARGET     = 5    # number of routes to display
 
-_MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun",
+MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun",
                "Jul","Aug","Sep","Oct","Nov","Dec"]
 
 
@@ -146,11 +148,21 @@ def _fmt_time(hours: float | None) -> str:
     return f"{int(round(hours / 24))}d"
 
 
+def _build_user_params(rock_onsight, rock_trad, ice_max, mixed_max, alpine_max) -> dict:
+    return {
+        "rock_onsight": rock_onsight,
+        "rock_trad":    None if rock_trad == "N/A" else rock_trad,
+        "ice_max":      None if ice_max   == "—"   else ice_max,
+        "mixed_max":    None if mixed_max == "—"   else mixed_max,
+        "alpine_max":   alpine_max,
+    }
+
+
 def _enrich_and_rerank() -> None:
-    """Enrich the top _TARGET routes with full data, then re-rank."""
+    """Enrich the top TARGET routes with full data, then re-rank."""
     state = st.session_state["search"]
     to_enrich = [
-        r for r in state["ranked"][:_TARGET]
+        r for r in state["ranked"][:TARGET]
         if r.get("document_id") not in state["enriched_ids"]
     ]
     if not to_enrich:
@@ -164,7 +176,7 @@ def _enrich_and_rerank() -> None:
 
 def _prefetch_summaries() -> None:
     """
-    For each of the top _TARGET routes:
+    For each of the top TARGET routes:
     - Fetch outing stubs (limit=50) for the stats row (report count, last date, peak months)
     - Generate a one-sentence guidebook description via the LLM using topo fields
 
@@ -176,7 +188,7 @@ def _prefetch_summaries() -> None:
     summaries   = state.setdefault("summaries", {})
 
     routes_needed = [
-        r for r in state["ranked"][:_TARGET]
+        r for r in state["ranked"][:TARGET]
         if r.get("document_id") not in summaries
     ]
     if not routes_needed:
@@ -194,15 +206,15 @@ def _prefetch_summaries() -> None:
 
 
 def _fetch_until_enough(params: dict, ep: float) -> None:
-    """Page through the Camptocamp API until we have _TARGET ranked matches."""
+    """Page through the Camptocamp API until we have TARGET ranked matches."""
     state = st.session_state["search"]
     bbox = st.session_state["bbox"]
     with st.spinner("Querying Camptocamp..."):
-        while len(state["ranked"]) < _TARGET and not state["api_exhausted"]:
-            page, total = fetch_page(bbox, _ACTIVITIES, state["api_offset"], _PAGE_SIZE)
+        while len(state["ranked"]) < TARGET and not state["api_exhausted"]:
+            page, total = fetch_page(bbox, ACTIVITIES, state["api_offset"], PAGE_SIZE)
             state["all_fetched"].extend(page)
             state["api_offset"] += len(page)
-            if state["api_offset"] >= total or len(page) < _PAGE_SIZE:
+            if state["api_offset"] >= total or len(page) < PAGE_SIZE:
                 state["api_exhausted"] = True
             state["ranked"] = rerank(
                 state["all_fetched"], state["excluded_ids"], params, ep
@@ -326,14 +338,11 @@ with tab1:
                     current_status = None
                     current_status_label = None
 
-                    _user_params = {
-                        "rock_onsight": rock_onsight,
-                        "rock_trad":    None if rock_trad == "N/A" else rock_trad,
-                        "ice_max":      None if ice_max   == "—"   else ice_max,
-                        "mixed_max":    None if mixed_max == "—"   else mixed_max,
-                        "alpine_max":   alpine_max,
-                    }
-                    for event in chat_alpinist(st.session_state["api_messages"], date.today(), user_params=_user_params):
+                    for event in chat_alpinist(
+                        st.session_state["api_messages"],
+                        date.today(),
+                        user_params=_build_user_params(rock_onsight, rock_trad, ice_max, mixed_max, alpine_max),
+                    ):
                         if event["type"] == "text":
                             accumulated += event["text"]
                             text_placeholder.markdown(accumulated + "▌")
@@ -496,7 +505,7 @@ with tab2:
                 "api_offset":    0,
                 "api_exhausted": False,
                 "ranked":        [],
-                "shown":         _TARGET,
+                "shown":         TARGET,
                 "enriched_ids":  set(),
                 "params":        params,
                 "easy_penalty":  easy_penalty,
@@ -553,7 +562,7 @@ with tab2:
                             try:
                                 _dated.append((_s, datetime.strptime(_raw, "%Y-%m-%d").date()))
                             except ValueError:
-                                pass
+                                print(f"[app] Could not parse trip report date: {_raw!r}")
                     _dated.sort(key=lambda x: x[1], reverse=True)
                     _total = len(_route_stubs)
                     _last  = _dated[0][1] if _dated else None
@@ -563,7 +572,7 @@ with tab2:
                     else:
                         _staleness = "no reports"
                     _mcounts  = Counter(_d.month for _, _d in _dated)
-                    _months   = " · ".join(_MONTH_ABBR[_m - 1] for _m, _ in _mcounts.most_common(3))
+                    _months   = " · ".join(MONTH_ABBR[_m - 1] for _m, _ in _mcounts.most_common(3))
                     _stats_html = (
                         f"<small style='color:#888'>"
                         f"{_total} reports &thinsp;·&thinsp; last {_staleness}"
@@ -589,7 +598,7 @@ with tab2:
                                 continue
                             delta    = deltas.get(sp_key)
                             colour_g = delta_colour(delta)
-                            label    = _GRADE_LABEL.get(sp_key, sp_key)
+                            label    = GRADE_LABEL.get(sp_key, sp_key)
                             limit    = params.get(sp_key) or "—"
                             tip = f"{label}: {val} — {delta_label(delta)} (your limit: {limit})"
                             pills.append(f'<span style="color:{colour_g}" title="{tip}">{val}</span>')
@@ -800,15 +809,8 @@ with tab3:
                 if weather_check2:
                     with st.spinner("Fetching weather data..."):
                         weather2 = fetch_weather(tab2_route, date.today())
-                user_params2 = {
-                    "rock_onsight":        rock_onsight,
-                    "rock_trad":           None if rock_trad == "N/A" else rock_trad,
-                    "ice_max":             None if ice_max   == "—"   else ice_max,
-                    "mixed_max":           None if mixed_max == "—"   else mixed_max,
-                    "alpine_max":          alpine_max,
-                }
                 analyses[cache_key] = {
-                    "text":    analyze_route(tab2_route, stubs2, full_outings2, user_params2, date.today(), weather=weather2),
+                    "text":    analyze_route(tab2_route, stubs2, full_outings2, _build_user_params(rock_onsight, rock_trad, ice_max, mixed_max, alpine_max), date.today(), weather=weather2),
                     "weather": weather2,
                 }
 
@@ -842,11 +844,9 @@ with tab3:
                     if bulletin.fetch_error:
                         st.warning(f"Avalanche bulletin ({bulletin.massif_name}): {bulletin.fetch_error}")
                     else:
-                        _DANGER_COLORS = {1: "green", 2: "blue", 3: "orange", 4: "red", 5: "red"}
-                        _DANGER_LABELS = {1: "Low", 2: "Limited", 3: "Considerable", 4: "High", 5: "Very High"}
                         lvl = bulletin.danger_level
-                        color = _DANGER_COLORS.get(lvl, "gray")
-                        label = _DANGER_LABELS.get(lvl, str(lvl))
+                        color = DANGER_COLORS.get(lvl, "gray")
+                        label = DANGER_LABELS.get(lvl, str(lvl))
                         st.markdown(
                             f"**Avalanche bulletin — {bulletin.massif_name}**  "
                             f"·  Danger :{color}[**{lvl}/5 — {label}**]  "

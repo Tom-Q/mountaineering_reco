@@ -249,6 +249,9 @@ def _build_all_days(lat: float, lon: float, past_days: int = 7,
         Compute the isotherm at each hour from simultaneous pressure-level readings,
         then return the minimum (find_min=True) or maximum altitude and its UTC hour.
         This ensures each isotherm is physically consistent — all levels from the same moment.
+
+        find_min=True  → refreeze isotherm (lowest 0°C altitude during night/morning)
+        find_min=False → melt isotherm (highest 0°C altitude during the day)
         """
         best_m: float | None = None
         best_str = "n/a"

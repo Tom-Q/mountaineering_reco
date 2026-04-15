@@ -43,18 +43,14 @@ def enrich_routes(
         enriched_ids.add(rid)
 
 
-def filter_excluded(routes: list[dict], excluded_ids: set) -> list[dict]:
-    """Return routes not in the excluded set."""
-    return [r for r in routes if r.get("document_id") not in excluded_ids]
-
-
 _SUPPORTED_ACTIVITIES = {"rock_climbing", "mountain_climbing", "ice_climbing", "snow_ice_mixed"}
 
 
 def rerank(all_fetched: list[dict], excluded_ids: set, params: dict, easy_penalty: float) -> list[dict]:
     """Filter excluded and off-discipline routes, then re-rank the remainder."""
     eligible = [
-        r for r in filter_excluded(all_fetched, excluded_ids)
-        if not (set(r.get("activities") or []) - _SUPPORTED_ACTIVITIES)
+        r for r in all_fetched
+        if r.get("document_id") not in excluded_ids
+        and set(r.get("activities") or []).issubset(_SUPPORTED_ACTIVITIES)
     ]
     return rank_routes(eligible, params, easy_penalty)

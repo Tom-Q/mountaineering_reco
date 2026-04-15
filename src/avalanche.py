@@ -33,7 +33,7 @@ _EAWS_MICRO_REGIONS_BASE = "https://regions.avalanches.org/micro-regions"
 _bulletin_session = requests_cache.CachedSession("avalanche_cache", expire_after=3600 * 6)
 _region_session   = requests_cache.CachedSession("eaws_regions_cache", expire_after=3600 * 24 * 7)
 
-_DANGER_LABELS = {1: "Low", 2: "Limited", 3: "Considerable", 4: "High", 5: "Very High"}
+DANGER_LABELS = {1: "Low", 2: "Limited", 3: "Considerable", 4: "High", 5: "Very High"}
 
 # CAAMLv6 text values → integer danger level
 _CAAML_DANGER = {
@@ -106,7 +106,7 @@ _EAWS_PROVIDERS = [
 # Micro-regions likely at: https://regions.avalanches.org/micro-regions/SI_micro-regions.geojson.json
 # Could be added to _EAWS_PROVIDERS once a stable /latest/ URL is confirmed.
 #
-# Spanish Pyrenees (AEMET) — not machine-readable; HTML bulletin only:
+# Spanish Pyrenees (AEMET) — not machine-readable; PDF bulletin only:
 #   https://www.aemet.es/es/eltiempo/prediccion/montana/boletin_peligro_aludes
 # Future: could link to this URL in the "no bulletin available" warning for routes in that area.
 
@@ -181,8 +181,12 @@ _massif_features: list | None = None
 def _find_massif(lat: float, lon: float) -> dict | None:
     global _massif_features
     if _massif_features is None:
-        with open(_MASSIF_GEOJSON, encoding="utf-8") as f:
-            _massif_features = json.load(f)["features"]
+        try:
+            with open(_MASSIF_GEOJSON, encoding="utf-8") as f:
+                _massif_features = json.load(f)["features"]
+        except (OSError, KeyError, json.JSONDecodeError) as exc:
+            print(f"[avalanche] Failed to load massif GeoJSON: {exc}")
+            return None
     for feature in _massif_features:
         if _point_in_multipolygon(lat, lon, feature["geometry"]):
             return feature["properties"]
@@ -288,11 +292,11 @@ def _parse_caaml_danger(ratings: list[dict]) -> tuple[int, int | None, int | Non
     if not parsed:
         return 0, None, None, None
 
-    max_danger = max(v for v, _, _ in parsed)
+    max_danger = max(v for v, _upper, _lower in parsed)
 
     # Detect altitude split: one entry with upperBound and one with lowerBound
-    upper_entries = [(v, u) for v, u, l in parsed if u is not None and l is None]
-    lower_entries = [(v, l) for v, u, l in parsed if l is not None and u is None]
+    upper_entries = [(v, upper_bound) for v, upper_bound, lower_bound in parsed if upper_bound is not None and lower_bound is None]
+    lower_entries = [(v, lower_bound) for v, upper_bound, lower_bound in parsed if lower_bound is not None and upper_bound is None]
 
     if upper_entries and lower_entries:
         lo_val = upper_entries[0][0]   # danger for elevations below the split
@@ -440,11 +444,11 @@ def _parse_aspects(pente_elem) -> list[str]:
 def _danger_str_short(b: AvalancheBulletin) -> str:
     if b.danger_split_altitude and b.danger_level_lo is not None and b.danger_level_hi is not None:
         return (
-            f"{b.danger_level_hi}/5 ({_DANGER_LABELS.get(b.danger_level_hi, '')}) "
+            f"{b.danger_level_hi}/5 ({DANGER_LABELS.get(b.danger_level_hi, '')}) "
             f"above {b.danger_split_altitude}m, "
-            f"{b.danger_level_lo}/5 ({_DANGER_LABELS.get(b.danger_level_lo, '')}) below"
+            f"{b.danger_level_lo}/5 ({DANGER_LABELS.get(b.danger_level_lo, '')}) below"
         )
-    lbl = _DANGER_LABELS.get(b.danger_level, "")
+    lbl = DANGER_LABELS.get(b.danger_level, "")
     return f"{b.danger_level}/5 ({lbl})"
 
 
@@ -470,7 +474,7 @@ def _build_ui_md(b: AvalancheBulletin) -> str:
             f"**{b.danger_level_lo}/5** below"
         )
     else:
-        lbl = _DANGER_LABELS.get(b.danger_level, "")
+        lbl = DANGER_LABELS.get(b.danger_level, "")
         danger_md = f"**{b.danger_level}/5 — {lbl}**"
 
     source_label = b.provider_name or b.source

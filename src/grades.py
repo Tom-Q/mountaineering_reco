@@ -242,6 +242,9 @@ def _compute_score(grade_deltas: dict[str, float],
         if over:
             P += sum(over)      # all over-limit disciplines accumulate
         elif under:
+            # Only when ALL skill disciplines are below limit: penalise by the
+            # smallest gap (the discipline closest to the user's level).
+            # -max(under) = smallest absolute gap (under values are negative).
             N += easy_penalty * -max(under)   # scaled by focus slider
 
     # Safety / equipment fields: per-field, respecting clamp_under.
