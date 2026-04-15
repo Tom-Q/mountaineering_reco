@@ -26,7 +26,6 @@ class WeatherSummary:
     historical_text: str       # pre-formatted for LLM injection
     ui_table: str              # markdown table for display in the app
     fetch_errors: list[str] = field(default_factory=list)
-    avalanche_bulletins: list = field(default_factory=list)  # list[AvalancheBulletin]
 
 
 @dataclass
@@ -477,12 +476,4 @@ def fetch_weather(route: dict, today: date) -> "WeatherSummary | None":
     elevation_max = route.get("elevation_max")
     elev_int = int(elevation_max) if elevation_max is not None else None
 
-    summary = fetch_weather_for_coords(lat, lon, today, elevation_m=elev_int)
-
-    from src.avalanche import fetch_avalanche_bulletin  # local import avoids circular dep
-    try:
-        summary.avalanche_bulletins = fetch_avalanche_bulletin(lat, lon)
-    except Exception as e:
-        summary.fetch_errors.append(f"Avalanche bulletin unavailable: {e}")
-
-    return summary
+    return fetch_weather_for_coords(lat, lon, today, elevation_m=elev_int)

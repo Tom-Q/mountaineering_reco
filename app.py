@@ -14,7 +14,8 @@ from src.camptocamp import latlon_bbox_to_mercator, fetch_outing_stubs, fetch_ou
 from src.avalanche import DANGER_LABELS
 from src.route_analysis import analyze_route, summarize_route
 from src.chat import chat_alpinist
-from src.weather import fetch_weather
+from src.weather import fetch_weather, route_coords
+from src.avalanche import fetch_avalanche_bulletin
 from src.search import fetch_page, enrich_routes, rerank, _select_outing_ids
 from src.grades import (
     match_colour, match_label, delta_colour, delta_label, GRADE_FIELDS,
@@ -807,18 +808,28 @@ with tab3:
                     except Exception:
                         pass
                 weather2 = None
+                avalanche2 = []
                 if weather_check2:
                     with st.spinner("Fetching weather data..."):
                         weather2 = fetch_weather(tab2_route, date.today())
+                    if weather2 is not None:
+                        coords2 = route_coords(tab2_route)
+                        if coords2 is not None:
+                            try:
+                                avalanche2 = fetch_avalanche_bulletin(coords2[0], coords2[1])
+                            except Exception as e:
+                                weather2.fetch_errors.append(f"Avalanche bulletin unavailable: {e}")
                 analyses[cache_key] = {
-                    "text":    analyze_route(tab2_route, stubs2, full_outings2, _build_user_params(rock_onsight, rock_trad, ice_max, mixed_max, alpine_max), date.today(), weather=weather2),
-                    "weather": weather2,
+                    "text":      analyze_route(tab2_route, stubs2, full_outings2, _build_user_params(rock_onsight, rock_trad, ice_max, mixed_max, alpine_max), date.today(), weather=weather2),
+                    "weather":   weather2,
+                    "avalanche": avalanche2,
                 }
 
             st.rerun()
 
         result = analyses[cache_key]
         wx = result["weather"]
+        avalanche_bulletins = result.get("avalanche", [])
         if weather_check2 and wx is None:
             st.warning("Weather unavailable: no coordinates found for this route.")
         elif wx and wx.fetch_errors and not wx.ui_table:
@@ -832,7 +843,7 @@ with tab3:
                     st.caption(wx.historical_text)
                 if wx.fetch_errors:
                     st.warning("  \n".join(wx.fetch_errors))
-                if not wx.avalanche_bulletins:
+                if not avalanche_bulletins:
                     st.divider()
                     st.caption(
                         "⚠ No integrated avalanche bulletin for this area. "
@@ -840,7 +851,7 @@ with tab3:
                         "(e.g. [avalanche.org](https://www.avalanches.org), "
                         "SLF, AINEVA, Météo-France, or the relevant national service)."
                     )
-                for bulletin in wx.avalanche_bulletins:
+                for bulletin in avalanche_bulletins:
                     st.divider()
                     if bulletin.fetch_error:
                         st.warning(f"Avalanche bulletin ({bulletin.massif_name}): {bulletin.fetch_error}")
