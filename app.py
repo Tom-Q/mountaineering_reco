@@ -12,7 +12,7 @@ from datetime import date, datetime
 
 from src.camptocamp import latlon_bbox_to_mercator, fetch_outing_stubs, fetch_outing_full, fetch_route, CHAMONIX_BBOX, search_routes_by_name
 from src.avalanche import DANGER_LABELS
-from src.analysis import analyze_route, summarize_route
+from src.route_analysis import analyze_route, summarize_route
 from src.chat import chat_alpinist
 from src.weather import fetch_weather
 from src.search import fetch_page, enrich_routes, rerank, _select_outing_ids
