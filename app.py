@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 from dotenv import load_dotenv
 import folium
@@ -10,7 +11,7 @@ from collections import Counter
 from datetime import date, datetime
 
 from src.camptocamp import latlon_bbox_to_mercator, fetch_outing_stubs, fetch_outing_full, fetch_route, CHAMONIX_BBOX, search_routes_by_name
-from src.llm import analyze_route, _select_outing_ids, summarize_route
+from src.llm import analyze_route, _select_outing_ids, summarize_route, chat_alpinist_stream
 from src.weather import fetch_weather
 from src.search import fetch_page, enrich_routes, rerank
 from src.grades import (
@@ -21,6 +22,22 @@ from src.grades import (
     EXPOSITION, EXPOSITION_LABELS,
     EQUIPMENT, EQUIPMENT_LABELS,
 )
+
+def _render_chat_images(text: str, attached: list | None = None) -> None:
+    """Render images for a chat message bubble.
+    - attached: list of bytes/PIL/URL strings from tool calls (Phase 2)
+    - text: scanned for markdown ![alt](url) syntax embedded by Claude
+    Images appear below the text in the same chat bubble.
+    st.image() accepts URLs, bytes, PIL images, and numpy arrays.
+    """
+    images = list(attached or [])
+    images.extend(re.findall(r'!\[.*?\]\((https?://[^\)]+)\)', text))
+    for img in images:
+        try:
+            st.image(img)
+        except Exception:
+            pass
+
 
 # Pin GeoMan to a specific version to avoid slow @latest resolution on unpkg
 GeoMan.default_js  = [("leaflet_geoman_js",  "https://unpkg.com/@geoman-io/leaflet-geoman-free@2.19.2/dist/leaflet-geoman.js")]
@@ -230,12 +247,65 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab1, tab2, tab3 = st.tabs(["Find routes", "Analyse a route", "About"])
+if "chat_history" not in st.session_state:
+    st.session_state["chat_history"] = []
+
+tab1, tab2, tab3, tab4 = st.tabs(["Chat with AI", "Find routes", "Analyse a route", "About"])
 
 # ===========================================================================
-# TAB 1 — Find routes: map + search + triage cards
+# TAB 1 — Chat with AI
 # ===========================================================================
 with tab1:
+    st.warning(
+        "This assistant may give inaccurate or dangerous advice. "
+        "Always verify conditions and route information from authoritative sources "
+        "before committing to any mountain objective.",
+        icon="⚠️",
+    )
+
+    # Declare the messages container first so it occupies space above the input.
+    # New messages are rendered into this container, keeping the input pinned below.
+    messages = st.container()
+    user_input = st.chat_input("Ask anything about alpine routes, gear, or conditions...")
+
+    with messages:
+        for msg in st.session_state["chat_history"]:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                _render_chat_images(msg["content"], msg.get("images"))
+
+        if user_input:
+            st.session_state["chat_history"].append({"role": "user", "content": user_input})
+            with st.chat_message("user"):
+                st.markdown(user_input)
+
+            reply = ""
+            with st.chat_message("assistant"):
+                try:
+                    reply = st.write_stream(
+                        chat_alpinist_stream(
+                            history=st.session_state["chat_history"],
+                            today=date.today(),
+                        )
+                    )
+                    _render_chat_images(reply)
+                except Exception as e:
+                    reply = f"Sorry, I couldn't reach the assistant ({e}). Please try again."
+                    st.markdown(reply)
+
+            st.session_state["chat_history"].append(
+                {"role": "assistant", "content": reply, "images": []}
+            )
+
+    if st.session_state["chat_history"]:
+        if st.button("Clear conversation", key="chat_clear"):
+            st.session_state["chat_history"] = []
+            st.rerun()
+
+# ===========================================================================
+# TAB 2 — Find routes: map + search + triage cards
+# ===========================================================================
+with tab2:
     col_results, col_map = st.columns([3, 2])
 
     with col_map:
@@ -529,9 +599,9 @@ with tab1:
 
 
 # ===========================================================================
-# TAB 2 — Analyse a route: select from Tab 1 results or search by name
+# TAB 3 — Analyse a route: select from Tab 2 results or search by name
 # ===========================================================================
-with tab2:
+with tab3:
     weather_check2 = st.checkbox(
         "Planning to go in the next few days — include weather check",
         value=False,
@@ -724,9 +794,9 @@ with tab2:
         )
 
 # ===========================================================================
-# TAB 3 — About
+# TAB 4 — About
 # ===========================================================================
-with tab3:
+with tab4:
     st.markdown("""
 ## About this tool
 

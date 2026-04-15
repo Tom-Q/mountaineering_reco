@@ -16,11 +16,13 @@ import requests_cache
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _MODEL = "claude-haiku-4-5-20251001"
+_CHAT_MODEL = "claude-sonnet-4-6"
 
 _client: anthropic.Anthropic | None = None
 _topo_session = requests_cache.CachedSession("topo_cache", expire_after=3600)
 _ROUTE_ANALYSIS_PROMPT = (_PROMPTS_DIR / "route_analysis.md").read_text()
 _ROUTE_SUMMARY_PROMPT  = (_PROMPTS_DIR / "route_summary.md").read_text()
+_ALPINIST_CHAT_SYSTEM  = (_PROMPTS_DIR / "alpinist_chat.md").read_text()
 
 # Skip non-text sources (videos, book purchase pages) that would return empty or
 # irrelevant content. "tvmountain" and "eosya" are video/subscription platforms.
@@ -314,3 +316,34 @@ def analyze_route(
         messages=[{"role": "user", "content": user_msg}],
     )
     return response.content[0].text.strip()
+
+
+# ---------------------------------------------------------------------------
+# Chat assistant
+# ---------------------------------------------------------------------------
+
+from collections.abc import Generator
+
+_MAX_CHAT_TURNS = 40
+
+
+def chat_alpinist_stream(
+    history: list[dict],
+    today: date,
+) -> Generator[str, None, None]:
+    """Streaming chat with the alpinist assistant. Yields text chunks.
+    Pass the return value directly to st.write_stream().
+    history must already include the latest user message as the last element.
+    The "images" key on each message (if present) is stripped before sending.
+    """
+    system = f"Today's date: {today.isoformat()}\n\n{_ALPINIST_CHAT_SYSTEM}"
+    trimmed = history[-_MAX_CHAT_TURNS:] if len(history) > _MAX_CHAT_TURNS else history
+    api_messages = [{"role": m["role"], "content": m["content"]} for m in trimmed]
+    with _get_client().messages.stream(
+        model=_CHAT_MODEL,
+        max_tokens=1024,
+        system=system,
+        messages=api_messages,
+    ) as stream:
+        for text in stream.text_stream:
+            yield text

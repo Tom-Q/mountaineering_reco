@@ -214,3 +214,4 @@ era5_cache.sqlite
 test_cache.sqlite
 test_weather.sqlite
 meteofrance_api_key.txt
+_external/

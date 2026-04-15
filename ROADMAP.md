@@ -2,7 +2,7 @@
 
 ## Status
 
-Last reviewed: 2026-04-14.
+Last reviewed: 2026-04-15.
 
 | Item | Status |
 |------|--------|
@@ -21,8 +21,14 @@ Shift from "pre-fetch everything, call LLM once" to a tool-calling architecture 
 
 - Expose existing integrations (Camptocamp, weather, avalanche) as callable tools
 - Keep grade filtering deterministic — expose it as a tool Claude can call, but logic stays in code
-- Multi-agent pattern: separate fetch agents (parallelisable) + a synthesis agent + optional reviewer agent
 - Streamlit UI remains unchanged at this stage
+
+**Architecture patterns to evaluate (informed by dreamiurg/claude-mountaineering-skills):**
+
+- **Multi-agent parallelism** — dispatch separate fetch agents simultaneously (one per data source), each returning a strict JSON contract, then merge results. Reduces latency and keeps concerns separated. Worth exploring once basic tool use is working; not necessarily the right first step.
+- **Writer + Reviewer agent separation** — a dedicated writer agent generates the report from a structured data package; a separate reviewer agent (potentially a stronger model) validates factual consistency, completeness, and safety before presenting to user. This is almost certainly the right pattern: it catches hallucinations and formatting issues without making the main agent prompt unwieldy.
+- **Graceful degradation with explicit gaps** — every source failure is logged to a `gaps` array that flows through to the final output. Missing data is never silently dropped; it appears in a visible "Information Gaps" section with manual lookup links. Adopt this regardless of agent architecture.
+- **Strict JSON output contracts** — agent prompts specify an exact JSON schema that agents must return, with "nothing else". Makes result parsing reliable (`json.loads()`) and eliminates prompt variability. Apply this to all sub-agents once the multi-agent pattern is adopted.
 
 ### Phase 2 — Chat tab
 Add a conversational interface alongside (or replacing) the current form-based UI.
@@ -70,6 +76,26 @@ Build a curated local vector store for static route beta.
 
 ## Backlog
 
+### Report template overhaul
+Current route analysis output is unstructured. Adopt a proper report template with consistent sections:
+Overview → Route description → Crux → Hazards → Current Conditions (weather + avalanche + daylight) → Trip Reports → Information Gaps → Sources.
+
+Notes:
+- "Crux" section: describe the hardest move/section specifically, not just the overall difficulty
+- AI disclaimer should be mandatory and appear prominently
+- Use bold sparingly — only for critical hazards, grade ratings, and weather windows
+- "Information Gaps" section must be explicit and always present (even if empty)
+- Reference: dreamiurg report template and Mount Shuksan example output
+
+### Daylight calculation
+Add sunrise/sunset/civil twilight for the route's coordinates and planned date. Useful for alpine start planning.
+Use the `astral` Python library (pure Python, no API key). Already used by dreamiurg.
+
+### Weather: verify elevation= parameter
+Check that our Open-Meteo calls pass `elevation=` for altitude correction at the route's actual elevation.
+Also consider: fetching weather at multiple elevation bands for the route (trailhead, mid-route, summit)
+rather than a single point. High-altitude wind and temperature can differ significantly from the base.
+
 ### C2C profile integration
 Load grades from a public Camptocamp numeric user ID and populate the sidebar selectors automatically.
 
@@ -82,6 +108,16 @@ LLM weather output is too verbose. Fix: instruct the model to report facts rathe
 
 ### Weather checkbox cache split
 Cache key is `(route_id, weather_check)` — toggling the checkbox forces a full re-run including LLM call. Weather fetch and analysis should be cached independently.
+
+### NA source integration (good-to-have, worldwide applicability)
+Add support for North American mountaineering sources. These are lower priority than European coverage but would make the app more universally useful:
+- **PeakBagger** — peak database + ascent logs with trip reports and GPX tracks. Has an unofficial CLI wrapper (peakbagger-cli).
+- **WTA** (Washington Trails Association) — detailed trip reports for PNW. Has an AJAX endpoint for report listing.
+- **AllTrails** — broad coverage but JS-rendered, hard to scrape. Useful for hiker-grade routes.
+- **Mountaineers.org** — technical route descriptions for Cascades.
+- **NWAC** — Northwest Avalanche Center. Publishes a JSON API; would slot in alongside EAWS/MF.
+
+Prerequisite: the tool-use architecture (Phase 1) makes this much easier to add incrementally.
 
 ### Avalanche — regions not yet integrated
 - **Slovenia**: CAAMLv6 format, same as existing EAWS feeds. Date-keyed URL known; needs a stable `/latest/` path confirmed before wiring up. See comment in `src/avalanche.py`.
