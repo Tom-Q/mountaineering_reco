@@ -29,7 +29,7 @@ from pathlib import Path
 # Grade scales
 # ---------------------------------------------------------------------------
 
-_g = yaml.safe_load((Path(__file__).parent.parent / "grade_systems.yaml").read_text())
+_g = yaml.safe_load((Path(__file__).parent.parent / "domain_knowledge" / "grade_systems.yaml").read_text())
 
 ROCK       = [str(g) for g in _g["rock_french"]["ordered"]]
 ICE        = _g["ice_wI"]["ordered"]

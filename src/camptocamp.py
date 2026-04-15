@@ -12,7 +12,7 @@ import requests_cache
 BASE_URL = "https://api.camptocamp.org"
 _DEFAULT_LANG = "fr"  # Covers the most Alpine routes; used in all API requests
 
-_session = requests_cache.CachedSession("c2c_cache", expire_after=3600)
+_session = requests_cache.CachedSession(".cache/c2c_cache", expire_after=3600)
 _session.headers["User-Agent"] = "mountaineering-reco-dev/0.1"
 
 _last_request_time: float = 0.0

@@ -17,7 +17,7 @@ from src.client import _get_client
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _MODEL = "claude-haiku-4-5-20251001"
 
-_topo_session = requests_cache.CachedSession("topo_cache", expire_after=3600)
+_topo_session = requests_cache.CachedSession(".cache/topo_cache", expire_after=3600)
 _ROUTE_ANALYSIS_PROMPT = (_PROMPTS_DIR / "route_analysis.md").read_text()
 _ROUTE_SUMMARY_PROMPT  = (_PROMPTS_DIR / "route_summary.md").read_text()
 

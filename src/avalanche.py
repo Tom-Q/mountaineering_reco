@@ -25,13 +25,13 @@ load_dotenv()
 _MF_API_KEY = os.getenv("METEOFRANCE_API_KEY", "")
 _MF_BRA_URL = "https://public-api.meteofrance.fr/public/DPBRA/v1/massif/BRA"
 _MF_IMAGE_URL = "https://public-api.meteofrance.fr/public/DPBRA/v1/massif/image"
-_MASSIF_GEOJSON = Path(__file__).parent.parent / "liste-massifs.geojson"
+_MASSIF_GEOJSON = Path(__file__).parent.parent / "domain_knowledge" / "liste-massifs.geojson"
 
 _EAWS_MICRO_REGIONS_BASE = "https://regions.avalanches.org/micro-regions"
 
 # Two cache TTLs: short for bulletins (issued 1–2× per day), long for region geometry (rarely changes)
-_bulletin_session = requests_cache.CachedSession("avalanche_cache", expire_after=3600 * 6)
-_region_session   = requests_cache.CachedSession("eaws_regions_cache", expire_after=3600 * 24 * 7)
+_bulletin_session = requests_cache.CachedSession(".cache/avalanche_cache", expire_after=3600 * 6)
+_region_session   = requests_cache.CachedSession(".cache/eaws_regions_cache", expire_after=3600 * 24 * 7)
 
 DANGER_LABELS = {1: "Low", 2: "Limited", 3: "Considerable", 4: "High", 5: "Very High"}
 

@@ -205,13 +205,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-c2c_cache.sqlite
-topo_cache.sqlite
-weather_cache.sqlite
-avalanche_cache.sqlite
-eaws_regions_cache.sqlite
-era5_cache.sqlite
-test_cache.sqlite
-test_weather.sqlite
-meteofrance_api_key.txt
+.cache/
+secrets/
 _external/

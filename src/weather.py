@@ -15,7 +15,7 @@ from datetime import date, timedelta
 
 import requests_cache
 
-_session = requests_cache.CachedSession("weather_cache", expire_after=3600)
+_session = requests_cache.CachedSession(".cache/weather_cache", expire_after=3600)
 
 
 @dataclass
