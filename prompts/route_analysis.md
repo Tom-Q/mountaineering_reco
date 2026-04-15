@@ -45,19 +45,19 @@ Populate this section if one or more of the following are true. Be direct: state
 - **No trip reports**: C2C has zero outings for this route, which may mean it is rarely attempted, has an access issue, or is poorly documented.
 - **Stale or alarming conditions**: the most recent report is older than 18 months, OR any report flags a major hazard — significant rockfall event, route-breaking rimaye (if same season), destroyed fixed gear, route no longer passable.
 - **Thin or missing topo**: the C2C description is absent or very short, leaving critical route-finding information unknown.
-- **Extreme framing in external resources**: external topos or articles describe this route as an extreme achievement, a committing adventure, or signal it is well outside a typical range of alpine objectives.
+- **Extreme framing in external resources**: external topos or articles describe this route as an extreme achievement, a committing adventure, or signal it is outside a typical range of alpine objectives.
 - **Any other significant red flag** apparent from the data.
 
 Output exactly the following five sections using `##` markdown headers. Do not add extra sections or preamble.
 
 ## Route overview
-2 to 5 sentences covering: the approach (duration, terrain type), the technical difficulties (what kind of climbing, key passages), and the descent. Write in the style of a concise guidebook entry. Example of the right level of detail: "Start at the Refuge des Cos,iques. After a 3h glacier approach, head up a steep snow slope with a short section of easy ice (up to WI2) to gain the ridge. The ridge itself is mostly easy scrambling (AD, ~4h) with one short crux at 4c. Descent by a separate path: 9 rappels, then a 2h glacier hike back to the hut."
+2 to 5 sentences covering: the approach (duration, terrain type), the technical difficulties (what kind of climbing, key passages), and the descent. Write in the style of a concise guidebook entry. Example of the right level of detail: "Start at the Refuge des Cosmiques. After a 3h glacier approach, head up a steep snow slope with a short section of easy ice (up to WI2) to gain the ridge. The ridge itself is mostly easy scrambling (AD, ~4h) with one short crux at 4c. Descent by a separate path: 9 rappels, then a 2h glacier hike back to the hut."
 
 ## Topo links
-Bullet list of useful links from the external resources section. Label each by source (e.g. Bergsteigen, ChamonixTopo, TVMountain). If fetched page content was provided, note that the content has been read. Omit book purchase links and duplicates. Include a link to the camptocamp route page.
+Bullet list of useful links from the external resources section. Label each by source (e.g. Bergsteigen, TVMountain). If fetched page content was provided, note that the content has been read. Omit book purchase links and duplicates. Include a link to the camptocamp route page.
 
 ## Seasonality
-Based on the date list of all trip reports, describe when this route is typically climbed. Mention peak months, any off-season ascents if present, and whether the date distribution suggests a narrow or broad season. If fewer than 10 reports are available, note that the sample is small.
+Based on the date list of all trip reports, describe when this route is typically climbed. Mention peak months, any off-season ascents if present, and whether the date distribution suggests a narrow or broad season. If fewer than 10 reports are available, note that the sample is small. If an external website (e.g. bergsteigen) indicates seasonality, use that too.
 
 ## Recent conditions
 Each report in the data is labelled with its age (e.g. "10mo ago"). Use these ages — do not recompute from dates.
