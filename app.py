@@ -11,7 +11,7 @@ from collections import Counter
 from datetime import date, datetime
 
 from src.camptocamp import latlon_bbox_to_mercator, fetch_outing_stubs, fetch_outing_full, fetch_route, CHAMONIX_BBOX, search_routes_by_name
-from src.llm import analyze_route, _select_outing_ids, summarize_route, chat_alpinist_stream
+from src.llm import analyze_route, _select_outing_ids, summarize_route, chat_alpinist
 from src.weather import fetch_weather
 from src.search import fetch_page, enrich_routes, rerank
 from src.grades import (
@@ -22,6 +22,38 @@ from src.grades import (
     EXPOSITION, EXPOSITION_LABELS,
     EQUIPMENT, EQUIPMENT_LABELS,
 )
+
+def _tool_status_label(name: str, tool_input: dict) -> str:
+    """Human-readable label for a tool call status indicator."""
+    if name == "get_weather_forecast":
+        lat = tool_input.get("latitude", "?")
+        lon = tool_input.get("longitude", "?")
+        elev = tool_input.get("elevation_m")
+        elev_str = f" ({elev}m)" if elev else ""
+        try:
+            return f"Fetching weather for {lat:.2f}°N, {lon:.2f}°E{elev_str}"
+        except (TypeError, ValueError):
+            return "Fetching weather..."
+    if name == "get_avalanche_bulletin":
+        lat = tool_input.get("latitude", "?")
+        lon = tool_input.get("longitude", "?")
+        try:
+            return f"Fetching avalanche bulletin for {lat:.2f}°N, {lon:.2f}°E"
+        except (TypeError, ValueError):
+            return "Fetching avalanche bulletin..."
+    if name == "search_routes_by_name":
+        query = tool_input.get("query", "")
+        return f"Searching Camptocamp for \"{query}\""
+    if name == "search_routes_by_area":
+        return "Searching Camptocamp routes in area"
+    if name == "fetch_route":
+        return f"Fetching route #{tool_input.get('route_id')}"
+    if name == "get_outing_list":
+        return f"Fetching trip report list for route #{tool_input.get('route_id')}"
+    if name == "get_outing_detail":
+        return f"Fetching trip report #{tool_input.get('outing_id')}"
+    return f"Calling {name}..."
+
 
 def _render_chat_images(text: str, attached: list | None = None) -> None:
     """Render images for a chat message bubble.
@@ -249,6 +281,12 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 if "chat_history" not in st.session_state:
     st.session_state["chat_history"] = []
+if "api_messages" not in st.session_state:
+    # Initialise from chat_history (plain string content is API-compatible)
+    st.session_state["api_messages"] = [
+        {"role": m["role"], "content": m["content"]}
+        for m in st.session_state["chat_history"]
+    ]
 
 tab1, tab2, tab3, tab4 = st.tabs(["Chat with AI", "Find routes", "Analyse a route", "About"])
 
@@ -276,18 +314,54 @@ with tab1:
 
         if user_input:
             st.session_state["chat_history"].append({"role": "user", "content": user_input})
+            st.session_state["api_messages"].append({"role": "user", "content": user_input})
             with st.chat_message("user"):
                 st.markdown(user_input)
 
             reply = ""
             with st.chat_message("assistant"):
                 try:
-                    reply = st.write_stream(
-                        chat_alpinist_stream(
-                            history=st.session_state["chat_history"],
-                            today=date.today(),
-                        )
-                    )
+                    text_placeholder = st.empty()
+                    accumulated = ""
+                    current_status = None
+                    current_status_label = None
+
+                    _user_params = {
+                        "rock_onsight": rock_onsight,
+                        "rock_trad":    None if rock_trad == "N/A" else rock_trad,
+                        "ice_max":      None if ice_max   == "—"   else ice_max,
+                        "mixed_max":    None if mixed_max == "—"   else mixed_max,
+                        "alpine_max":   alpine_max,
+                    }
+                    for event in chat_alpinist(st.session_state["api_messages"], date.today(), user_params=_user_params):
+                        if event["type"] == "text":
+                            accumulated += event["text"]
+                            text_placeholder.markdown(accumulated + "▌")
+
+                        elif event["type"] == "tool_start":
+                            current_status_label = _tool_status_label(event["name"], event["input"])
+                            current_status = st.status(current_status_label + "...", expanded=False)
+
+                        elif event["type"] == "tool_end":
+                            if current_status is not None:
+                                if event["error"]:
+                                    current_status.update(
+                                        label=f"⚠ {current_status_label} — failed",
+                                        state="error",
+                                    )
+                                else:
+                                    current_status.update(
+                                        label=f"✓ {current_status_label}",
+                                        state="complete",
+                                    )
+                                current_status = None
+                                current_status_label = None
+
+                        elif event["type"] == "done":
+                            text_placeholder.markdown(accumulated)
+                            st.session_state["api_messages"].extend(event["new_api_messages"])
+                            reply = accumulated
+
                     _render_chat_images(reply)
                 except Exception as e:
                     reply = f"Sorry, I couldn't reach the assistant ({e}). Please try again."
@@ -300,6 +374,7 @@ with tab1:
     if st.session_state["chat_history"]:
         if st.button("Clear conversation", key="chat_clear"):
             st.session_state["chat_history"] = []
+            st.session_state["api_messages"] = []
             st.rerun()
 
 # ===========================================================================

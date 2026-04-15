@@ -92,8 +92,9 @@ Add sunrise/sunset/civil twilight for the route's coordinates and planned date. 
 Use the `astral` Python library (pure Python, no API key). Already used by dreamiurg.
 
 ### Weather: verify elevation= parameter
-Check that our Open-Meteo calls pass `elevation=` for altitude correction at the route's actual elevation.
-Also consider: fetching weather at multiple elevation bands for the route (trailhead, mid-route, summit)
+✅ Done — `_build_all_days` and `_fetch_historical_text` now accept and pass `elevation_m` to Open-Meteo.
+
+Consider: fetching weather at multiple elevation bands (trailhead, mid-route, summit)
 rather than a single point. High-altitude wind and temperature can differ significantly from the base.
 
 ### C2C profile integration
@@ -118,6 +119,9 @@ Add support for North American mountaineering sources. These are lower priority 
 - **NWAC** — Northwest Avalanche Center. Publishes a JSON API; would slot in alongside EAWS/MF.
 
 Prerequisite: the tool-use architecture (Phase 1) makes this much easier to add incrementally.
+
+### Meteoblue for weather
+Switch from Open-Meteo to [meteoblue](https://www.meteoblue.com) for weather forecasts. Meteoblue is better quality (proprietary model, higher resolution in the Alps, multi-model ensemble), and Camptocamp already links to it per-hut. Requires an API key (paid). Relevant once the tool-use architecture is in place — the weather tool is the natural integration point.
 
 ### Avalanche — regions not yet integrated
 - **Slovenia**: CAAMLv6 format, same as existing EAWS feeds. Date-keyed URL known; needs a stable `/latest/` path confirmed before wiring up. See comment in `src/avalanche.py`.

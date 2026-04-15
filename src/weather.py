@@ -143,7 +143,8 @@ def _iso_meters(iso: str) -> float | None:
         return None
 
 
-def _build_all_days(lat: float, lon: float, past_days: int = 7) -> list[_DayForecast]:
+def _build_all_days(lat: float, lon: float, past_days: int = 7,
+                    elevation_m: int | None = None) -> list[_DayForecast]:
     """
     Fetch past `past_days` days + 7-day forecast from Open-Meteo in one call.
 
@@ -155,11 +156,16 @@ def _build_all_days(lat: float, lon: float, past_days: int = 7) -> list[_DayFore
     - refreeze_isotherm: minimum 0°C altitude over 00–09 UTC (coldest hours)
     - melt_isotherm:     maximum 0°C altitude over 07–23 UTC (hottest hours)
     """
+    params: dict = {
+        "latitude": lat,
+        "longitude": lon,
+    }
+    if elevation_m is not None:
+        params["elevation"] = elevation_m
     r = _session.get(
         "https://api.open-meteo.com/v1/forecast",
         params={
-            "latitude": lat,
-            "longitude": lon,
+            **params,
             "hourly": [
                 "temperature_2m",
                 "temperature_925hPa",
@@ -370,16 +376,19 @@ def _format_ui_table(hist_days: list[_DayForecast], forecast_days: list[_DayFore
 
 
 
-def _fetch_historical_text(lat: float, lon: float, today: date, days_back: int = 90) -> str:
+def _fetch_historical_text(lat: float, lon: float, today: date, days_back: int = 90,
+                           elevation_m: int | None = None) -> str:
     """Return a sentence summarising snowfall in the past `days_back` days."""
     start = (today - timedelta(days=days_back)).isoformat()
     end   = (today - timedelta(days=3)).isoformat()  # archive lags a few days
 
+    params: dict = {"latitude": lat, "longitude": lon}
+    if elevation_m is not None:
+        params["elevation"] = elevation_m
     r = _session.get(
         "https://archive-api.open-meteo.com/v1/archive",
         params={
-            "latitude": lat,
-            "longitude": lon,
+            **params,
             "start_date": start,
             "end_date": end,
             "daily": ["snowfall_sum"],
@@ -408,24 +417,25 @@ def _fetch_historical_text(lat: float, lon: float, today: date, days_back: int =
     return " ".join(parts)
 
 
-def fetch_weather(route: dict, today: date) -> "WeatherSummary | None":
+def fetch_weather_for_coords(
+    lat: float,
+    lon: float,
+    today: date,
+    elevation_m: int | None = None,
+) -> "WeatherSummary":
     """
-    Fetch weather data for a route. Returns None if no coordinates are available.
+    Fetch weather data for explicit coordinates.
 
-    Errors in individual fetches are recorded in WeatherSummary.fetch_errors
-    rather than propagated, so a partial result is still returned.
+    This is the core fetch function, usable as a Claude tool.
+    Avalanche data is NOT included — that is a separate tool.
+    Errors in individual fetches are recorded in WeatherSummary.fetch_errors.
     """
-    coords = route_coords(route)
-    if coords is None:
-        return None
-
-    lat, lon = coords
     errors: list[str] = []
 
     hist_days:     list[_DayForecast] = []
     forecast_days: list[_DayForecast] = []
     try:
-        all_days = _build_all_days(lat, lon, past_days=7)
+        all_days = _build_all_days(lat, lon, past_days=7, elevation_m=elevation_m)
         today_str_split = today.isoformat()
         hist_days     = [d for d in all_days if d.date <  today_str_split]
         forecast_days = [d for d in all_days if d.date >= today_str_split]
@@ -434,26 +444,42 @@ def fetch_weather(route: dict, today: date) -> "WeatherSummary | None":
 
     historical_text = ""
     try:
-        historical_text = _fetch_historical_text(lat, lon, today)
+        historical_text = _fetch_historical_text(lat, lon, today, elevation_m=elevation_m)
     except Exception as e:
         errors.append(f"Historical data unavailable: {e}")
 
-    from src.avalanche import fetch_avalanche_bulletin  # local import avoids circular dep
-    avalanche_bulletins = []
-    try:
-        avalanche_bulletins = fetch_avalanche_bulletin(lat, lon)
-    except Exception as e:
-        errors.append(f"Avalanche bulletin unavailable: {e}")
-
     today_str = today.isoformat()
-    elevation_max = route.get("elevation_max")
-    elev_int = int(elevation_max) if elevation_max is not None else None
     return WeatherSummary(
         fetch_date=today_str,
         coords=(lat, lon),
         forecast_text=_format_forecast_text(forecast_days) if forecast_days else "",
         historical_text=historical_text,
-        ui_table=_format_ui_table(hist_days, forecast_days, today_str, elev_int),
+        ui_table=_format_ui_table(hist_days, forecast_days, today_str, elevation_m),
         fetch_errors=errors,
-        avalanche_bulletins=avalanche_bulletins,
     )
+
+
+def fetch_weather(route: dict, today: date) -> "WeatherSummary | None":
+    """
+    Fetch weather data for a route. Returns None if no coordinates are available.
+
+    Thin wrapper around fetch_weather_for_coords that extracts coords from the
+    route dict and bundles avalanche bulletins for the Streamlit app flow.
+    """
+    coords = route_coords(route)
+    if coords is None:
+        return None
+
+    lat, lon = coords
+    elevation_max = route.get("elevation_max")
+    elev_int = int(elevation_max) if elevation_max is not None else None
+
+    summary = fetch_weather_for_coords(lat, lon, today, elevation_m=elev_int)
+
+    from src.avalanche import fetch_avalanche_bulletin  # local import avoids circular dep
+    try:
+        summary.avalanche_bulletins = fetch_avalanche_bulletin(lat, lon)
+    except Exception as e:
+        summary.fetch_errors.append(f"Avalanche bulletin unavailable: {e}")
+
+    return summary
