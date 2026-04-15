@@ -1,42 +1,32 @@
 # Improvement Roadmap: Mountaineering Recommender
 
-## Status
-
-Last reviewed: 2026-04-15.
-
-| Item | Status |
-|------|--------|
-| 1a. Improve forecast isotherm (925/600/500 hPa, min/max split) | ✅ Done |
-| 1b. Historical isotherm — ERA5/CDS approach | ✅ Dropped — Open-Meteo handles this adequately |
-| 2. Better C2C pre-filtering (qa=1, larger stubs limit) | ✅ Done |
-| 3. About tab | ✅ Done |
-| 4. Avalanche risk integration (MF BRA + EAWS/SLF) | ✅ Done |
-
----
-
 ## Architecture evolution
 
-### Phase 1 — Tool use
-Shift from "pre-fetch everything, call LLM once" to a tool-calling architecture where Claude decides what to fetch and when.
+### Phase 1 — Tool use ✅ Mostly done
 
-- Expose existing integrations (Camptocamp, weather, avalanche) as callable tools
-- Keep grade filtering deterministic — expose it as a tool Claude can call, but logic stays in code
-- Streamlit UI remains unchanged at this stage
+Camptocamp, weather, and avalanche are exposed as callable tools in `src/tools.py` with strict input/output contracts. Streaming agentic loop in the chat tab calls them.
 
-**Architecture patterns to evaluate (informed by dreamiurg/claude-mountaineering-skills):**
+Remaining:
+- Grade filtering not yet exposed as a tool — Claude can't call `rank_routes()` directly from chat. Logic is in `src/grades.py`; wrapping it in a tool is the last piece.
+
+**Architecture patterns still to consider (informed by dreamiurg/claude-mountaineering-skills):**
 
 - **Multi-agent parallelism** — dispatch separate fetch agents simultaneously (one per data source), each returning a strict JSON contract, then merge results. Reduces latency and keeps concerns separated. Worth exploring once basic tool use is working; not necessarily the right first step.
 - **Writer + Reviewer agent separation** — a dedicated writer agent generates the report from a structured data package; a separate reviewer agent (potentially a stronger model) validates factual consistency, completeness, and safety before presenting to user. This is almost certainly the right pattern: it catches hallucinations and formatting issues without making the main agent prompt unwieldy.
 - **Graceful degradation with explicit gaps** — every source failure is logged to a `gaps` array that flows through to the final output. Missing data is never silently dropped; it appears in a visible "Information Gaps" section with manual lookup links. Adopt this regardless of agent architecture.
-- **Strict JSON output contracts** — agent prompts specify an exact JSON schema that agents must return, with "nothing else". Makes result parsing reliable (`json.loads()`) and eliminates prompt variability. Apply this to all sub-agents once the multi-agent pattern is adopted.
 
-### Phase 2 — Chat tab
-Add a conversational interface alongside (or replacing) the current form-based UI.
+### Phase 2 — Chat tab ✅ Mostly done
 
-- New Streamlit tab using `st.chat_message` / `st.chat_input`
-- Claude can ask clarifying questions ("what grade are you targeting?", "ski or ice?")
-- Session-level conversation history
-- Existing results tab can coexist during transition
+- `st.chat_message` / `st.chat_input` UI ✅
+- Session-level conversation history (UI + API formats) ✅
+- Streaming agentic loop with tool calling ✅
+- Climber grade profile injected into system prompt ✅
+- Coexists with route finder tabs ✅
+
+Remaining gaps:
+- System prompt doesn't actively instruct Claude to ask clarifying questions
+- Tool results (weather data, route summaries) not shown inline — only status indicators, then prose synthesis
+- Sidebar risk/engagement preferences not passed to chat context, only climbing grades are
 
 ### Phase 3 — Hut data
 Build a local hut database to eliminate per-request API calls for static hut info.
@@ -94,8 +84,7 @@ Use the `astral` Python library (pure Python, no API key). Already used by dream
 ### Weather: verify elevation= parameter
 ✅ Done — `_build_all_days` and `_fetch_historical_text` now accept and pass `elevation_m` to Open-Meteo.
 
-Consider: fetching weather at multiple elevation bands (trailhead, mid-route, summit)
-rather than a single point. High-altitude wind and temperature can differ significantly from the base.
+Consider fetching weather at multiple elevation bands (trailhead, mid-route, summit) for routes with large altitude gain. High-altitude wind and temperature can differ significantly from the base — relevant for routes with >1000m of elevation difference. The weather tool currently accepts a single `elevation_m`; extending it to accept a list of elevations and return one forecast per band would cover this.
 
 ### C2C profile integration
 Load grades from a public Camptocamp numeric user ID and populate the sidebar selectors automatically.
@@ -125,5 +114,5 @@ Switch from Open-Meteo to [meteoblue](https://www.meteoblue.com) for weather for
 
 ### Avalanche — regions not yet integrated
 - **Slovenia**: CAAMLv6 format, same as existing EAWS feeds. Date-keyed URL known; needs a stable `/latest/` path confirmed before wiring up. See comment in `src/avalanche.py`.
-- **Spanish Pyrenees (AEMET)**: HTML only, not machine-readable. URL saved as comment in `src/avalanche.py` for a future user-facing link.
+- **Spanish Pyrenees (AEMET)**: HTML only, not machine-readable. For routes in the relevant Pyrenean regions (Nov–May), surface a direct link to the bulletin page instead of a data integration: https://www.aemet.es/es/eltiempo/prediccion/montana/boletin_peligro_aludes — either in the avalanche tool result or in the chat response when no machine-readable bulletin is found.
 - **AT-05/AT-06/AT-08**: wired up in `_EAWS_PROVIDERS` but feeds currently 404 (seasonal). Will activate automatically when feeds come back online.

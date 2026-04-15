@@ -36,6 +36,8 @@ This is a Streamlit app that recommends alpine climbing routes by combining dete
 
 Do not add "Co-Authored-By: Claude" or any AI attribution to commit messages.
 
+Never run `git commit` or `git push` unless explicitly instructed. Completing a task does not imply permission to commit.
+
 ## LLM usage
 
 Uses the Anthropic Python SDK (`anthropic` package). API key loaded from `.env` via `python-dotenv`.
