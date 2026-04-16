@@ -116,6 +116,8 @@ def build_analysis_prompt(
     user_params: dict,
     today: date,
     weather=None,
+    avalanche: list | None = None,
+    gaps: list[str] | None = None,
 ) -> str:
     """
     Build the user message for the route analysis LLM call.
@@ -141,12 +143,15 @@ def build_analysis_prompt(
 
     # --- External topo pages ---
     fetched_pages: list[str] = []
+    _gaps: list[str] = list(gaps) if gaps else []
     if external:
         urls = _extract_urls(external)
         for url in urls:
             content = _fetch_topo_page(url)
             if content:
                 fetched_pages.append(f"[Fetched from {url}]\n{content}")
+            elif not any(pat in url for pat in _SKIP_URL_PATTERNS):
+                _gaps.append(f"Topo page could not be fetched: {url}")
             if len(fetched_pages) >= 2:
                 break
 
@@ -230,18 +235,24 @@ def build_analysis_prompt(
             wx_lines.append("\n### Snowfall history\n" + weather.historical_text)
         parts.append("\n".join(wx_lines))
 
-    if weather is not None:
-        for bulletin in weather.avalanche_bulletins:
-            if not bulletin.fetch_error and bulletin.llm_text:
-                parts.append(bulletin.llm_text)
+    for bulletin in (avalanche or []):
+        if not bulletin.fetch_error and bulletin.llm_text:
+            parts.append(bulletin.llm_text)
+        elif bulletin.fetch_error:
+            _gaps.append(
+                f"Avalanche bulletin unavailable ({bulletin.provider_name}): {bulletin.fetch_error}"
+            )
+
+    if _gaps:
+        parts.append("## Information gaps\n" + "\n".join(f"- {g}" for g in _gaps))
 
     return "\n\n".join(parts)
 
 
-def _max_tokens_for_analysis(weather) -> int:
+def _max_tokens_for_analysis(weather, avalanche) -> int:
     if weather is None:
         return 2000
-    if weather.avalanche_bulletins:
+    if avalanche:
         return 2800
     return 2500
 
@@ -253,18 +264,23 @@ def analyze_route(
     user_params: dict,
     today: date,
     weather=None,
+    avalanche: list | None = None,
+    gaps: list[str] | None = None,
 ) -> str:
     """
     Return a markdown-formatted route analysis.
 
     Standard sections: Route overview, Topo links, Seasonality, Recent conditions,
     Relative to your level. A Weather outlook section is appended when weather data
-    is provided.
+    is provided. An Information gaps section is appended when any data source failed.
     """
-    user_msg = build_analysis_prompt(route, stubs, full_outings, user_params, today, weather)
+    user_msg = build_analysis_prompt(
+        route, stubs, full_outings, user_params, today, weather,
+        avalanche=avalanche, gaps=gaps,
+    )
     response = _get_client().messages.create(
         model=_MODEL,
-        max_tokens=_max_tokens_for_analysis(weather),
+        max_tokens=_max_tokens_for_analysis(weather, avalanche),
         system=_ROUTE_ANALYSIS_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
     )

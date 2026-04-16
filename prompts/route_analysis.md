@@ -91,3 +91,7 @@ If avalanche bulletin data was provided, add this section after Weather outlook.
 - **Aspects and terrain at risk**: which slope orientations are flagged. Relate this to the route's aspects where possible (e.g. "the approach couloir faces NE, which is listed as at risk").
 - **Avalanche problems**: summarise the main hazard types from the bulletin (wet snow, wind slab, persistent weak layer, glide avalanche, etc.) and the altitudes concerned.
 - **Go/no-go relevance**: given the route's aspect and elevation profile, state plainly whether the bulletin is a concern for this specific objective or not.
+
+## Information gaps (conditional — include only if an `## Information gaps` block appears in the input)
+
+If the input contains an `## Information gaps` section, reproduce each gap as a bullet, exactly as written. Do not paraphrase, summarise, or add commentary. Do not invent gaps. If no gaps are listed in the input, omit this section entirely.

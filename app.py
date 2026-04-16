@@ -802,11 +802,15 @@ with tab3:
                 stubs2 = fetch_outing_stubs(rid, limit=200)
                 selected_ids2 = _select_outing_ids(stubs2, date.today())
                 full_outings2 = []
+                gaps2: list[str] = []
                 for oid in selected_ids2:
                     try:
                         full_outings2.append(fetch_outing_full(oid))
                     except Exception:
-                        pass
+                        gaps2.append(
+                            f"Trip report #{oid} could not be fetched — "
+                            f"check Camptocamp directly"
+                        )
                 weather2 = None
                 avalanche2 = []
                 if weather_check2:
@@ -819,8 +823,18 @@ with tab3:
                                 avalanche2 = fetch_avalanche_bulletin(coords2[0], coords2[1])
                             except Exception as e:
                                 weather2.fetch_errors.append(f"Avalanche bulletin unavailable: {e}")
+                                gaps2.append(
+                                    f"Avalanche bulletin unavailable: {e} — "
+                                    f"check https://avalanche.report or your regional service"
+                                )
                 analyses[cache_key] = {
-                    "text":      analyze_route(tab2_route, stubs2, full_outings2, _build_user_params(rock_onsight, rock_trad, ice_max, mixed_max, alpine_max), date.today(), weather=weather2),
+                    "text":      analyze_route(
+                        tab2_route, stubs2, full_outings2,
+                        _build_user_params(rock_onsight, rock_trad, ice_max, mixed_max, alpine_max),
+                        date.today(), weather=weather2,
+                        avalanche=avalanche2 or None,
+                        gaps=gaps2 or None,
+                    ),
                     "weather":   weather2,
                     "avalanche": avalanche2,
                 }
