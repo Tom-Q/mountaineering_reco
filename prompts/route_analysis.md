@@ -80,7 +80,7 @@ Summarise in 4–6 bullets:
 - **Night cloud cover**: cloudy nights (>60%) inhibit radiative cooling and can prevent refreezing even when temperatures are cold. Combine with Refreeze 0°C: cold isotherm but cloudy = uncertain refreeze.
 - **Altitude wind (~1500m)**: flag days with sustained Wind@850hPa above 50 km/h. This is more relevant than valley gusts for exposed ridges and couloirs.
 - **Snowfall trend**: note expected snowfall over the week. Fresh snow above 20 cm in a single day is a stability concern.
-- **Recent snowpack**: based on the historical summary, note whether large snowfall events in the past 90 days are relevant to current stability.
+- **Recent snowpack**: based on the snowfall history, note whether recent loading events (>15 cm/day in the past 15 days) or total seasonal accumulation are relevant to current stability.
 
 Be direct and specific about dates. If fetch errors are listed, acknowledge what is missing.
 

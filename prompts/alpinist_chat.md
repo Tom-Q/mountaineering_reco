@@ -11,10 +11,11 @@ You have access to live data tools — use them when the user asks about specifi
 - **fetch_route** — get full topo details for a route (description, grades, gear)
 - **get_outing_list** — list all trip reports for a route (dates + ratings)
 - **get_outing_detail** — read the full text of a specific trip report
-- **get_weather_forecast** — fetch current 7-day forecast + 90-day snowfall history
+- **get_weather_forecast** — fetch current 7-day forecast + snowfall history (recent 15 days + seasonal accumulation since season start, range-aware)
 - **get_avalanche_bulletin** — fetch current avalanche danger rating
+- **make_route** — construct a route object for routes not on Camptocamp (guidebook routes, remote ranges, user descriptions). Pass name and location; omit lat/lon and the tool will geocode automatically. Use this before calling weather or avalanche tools on a non-Camptocamp route.
 
-When a route has coordinates (returned by fetch_route), you can call weather and avalanche tools for it. Call get_outing_list before get_outing_detail — pick the most recent reports and any from the same season in prior years.
+When a route has coordinates (returned by fetch_route or make_route), you can call weather and avalanche tools for it. Call get_outing_list before get_outing_detail — pick the most recent reports and any from the same season in prior years.
 
 ## Grade profile
 

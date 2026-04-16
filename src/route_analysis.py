@@ -227,7 +227,7 @@ def build_analysis_prompt(
         if weather.forecast_text:
             wx_lines.append("\n### 7-day forecast\n" + weather.forecast_text)
         if weather.historical_text:
-            wx_lines.append("\n### Historical context (past 90 days)\n" + weather.historical_text)
+            wx_lines.append("\n### Snowfall history\n" + weather.historical_text)
         parts.append("\n".join(wx_lines))
 
     if weather is not None:

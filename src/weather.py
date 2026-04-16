@@ -1,21 +1,33 @@
 """
 Weather data integration for route analysis.
 
-Fetches a 7-day forecast and a 90-day historical summary from Open-Meteo
+Fetches a 7-day forecast and a snowfall history from Open-Meteo
 (free, no authentication required) for the route's coordinates.
 
 The forecast uses hourly data aggregated to daily values, including pressure-level
 variables (925/850/700/600/500 hPa) for altitude wind and 0°C isotherm computation.
+
+Snowfall history has two signals:
+- Recent (past 15 days, always): tracks total and large events (>15 cm/day).
+- Seasonal (since season start): total accumulation, only shown when in-season.
+  Season windows are range-aware — see domain_knowledge/snow_seasons.yaml. Ranges
+  with no seasonal concept (Himalaya, equatorial/tropical) show a note or recent-only.
 """
 
 import json
 import math
+import yaml
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 import requests_cache
+from pathlib import Path
 
 _session = requests_cache.CachedSession(".cache/weather_cache", expire_after=3600)
+
+_snow_seasons = yaml.safe_load(
+    (Path(__file__).parent.parent / "domain_knowledge" / "snow_seasons.yaml").read_text()
+)["ranges"]
 
 
 @dataclass
@@ -23,7 +35,7 @@ class WeatherSummary:
     fetch_date: str
     coords: tuple[float, float]
     forecast_text: str         # pre-formatted for LLM injection
-    historical_text: str       # pre-formatted for LLM injection
+    historical_text: str       # snowfall history (recent + seasonal) for LLM injection
     ui_table: str              # markdown table for display in the app
     fetch_errors: list[str] = field(default_factory=list)
 
@@ -378,44 +390,126 @@ def _format_ui_table(hist_days: list[_DayForecast], forecast_days: list[_DayFore
 
 
 
-def _fetch_historical_text(lat: float, lon: float, today: date, days_back: int = 90,
-                           elevation_m: int | None = None) -> str:
-    """Return a sentence summarising snowfall in the past `days_back` days."""
-    start = (today - timedelta(days=days_back)).isoformat()
-    end   = (today - timedelta(days=3)).isoformat()  # archive lags a few days
+def _season_start_for_range(range_name: str, today: date) -> date | None:
+    """
+    Return the start date of the current snow season for a range, or None if:
+    - the range has no seasonal window in snow_seasons.yaml (null entry), or
+    - today falls outside the season window.
 
-    params: dict = {"latitude": lat, "longitude": lon}
-    if elevation_m is not None:
-        params["elevation"] = elevation_m
-    r = _session.get(
-        "https://archive-api.open-meteo.com/v1/archive",
-        params={
-            **params,
-            "start_date": start,
-            "end_date": end,
-            "daily": ["snowfall_sum"],
-            "timezone": "UTC",
-        },
-        timeout=20,
-    )
-    r.raise_for_status()
-    d = r.json().get("daily", {})
-    dates     = d.get("time", [])
-    snowfalls = d.get("snowfall_sum", [])
+    Handles year-spanning NH seasons (e.g. Nov–May crosses a calendar year).
+    """
+    entry = _snow_seasons.get(range_name)
+    if not entry:
+        return None
 
-    total = sum(s for s in snowfalls if s is not None)
-    big_snow = [
-        (day, s) for day, s in zip(dates, snowfalls) if s is not None and s > 15
-    ]
-    parts = [f"Total snowfall past {days_back} days: {total:.0f} cm."]
-    if big_snow:
-        biggest = max(big_snow, key=lambda x: x[1])
-        parts.append(
-            f"{len(big_snow)} large event(s) >15 cm/day "
-            f"(largest: {biggest[1]:.0f} cm on {biggest[0]})."
-        )
+    sm, sd = entry["season_start"]
+    em, ed = entry["season_end"]
+    crosses_year = sm > em  # True for NH winters (Nov–May), False for SH summers (Apr–Sep)
+
+    if crosses_year:
+        today_in_end_half   = (today.month, today.day) <= (em, ed)
+        today_in_start_half = (today.month, today.day) >= (sm, sd)
+        if today_in_end_half:
+            # e.g. today is Feb 2026 → season started Nov 2025
+            return date(today.year - 1, sm, sd)
+        elif today_in_start_half:
+            # e.g. today is Nov 2025 → season just started
+            return date(today.year, sm, sd)
+        else:
+            return None  # out of season (e.g. Alps in July)
     else:
-        parts.append("No single-day events above 15 cm.")
+        # Season stays within one calendar year (SH ranges)
+        if (today.month, today.day) >= (sm, sd) and (today.month, today.day) <= (em, ed):
+            return date(today.year, sm, sd)
+        return None
+
+
+def _fetch_snowfall_summary(
+    lat: float,
+    lon: float,
+    today: date,
+    range_name: str,
+    elevation_m: int | None = None,
+) -> str:
+    """
+    Return a formatted snowfall summary for the given location and range.
+
+    Always includes recent snowfall (past 15 days, events >15 cm/day flagged).
+    Adds seasonal accumulation (since season start) when the range is in-season.
+    Himalaya returns a fixed note about monsoon-driven accumulation instead.
+    """
+    if range_name == "himalaya":
+        return (
+            "Snowpack note: this is a monsoon-accumulation range. Seasonal snowfall "
+            "figures are not meaningful here — consult local sources (guiding outfits, "
+            "Himalayan Experience bulletins) for current snowpack conditions."
+        )
+
+    base_params: dict = {"latitude": lat, "longitude": lon}
+    if elevation_m is not None:
+        base_params["elevation"] = elevation_m
+
+    archive_end = (today - timedelta(days=3)).isoformat()  # archive lags ~3 days
+    parts: list[str] = []
+
+    # --- Recent snowfall (always shown) ---
+    recent_start = (today - timedelta(days=15)).isoformat()
+    try:
+        r = _session.get(
+            "https://archive-api.open-meteo.com/v1/archive",
+            params={
+                **base_params,
+                "start_date": recent_start,
+                "end_date": archive_end,
+                "daily": ["snowfall_sum"],
+                "timezone": "UTC",
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        d = r.json().get("daily", {})
+        dates     = d.get("time", [])
+        snowfalls = d.get("snowfall_sum", [])
+        recent_total = sum(s for s in snowfalls if s is not None)
+        big_events = [(day, s) for day, s in zip(dates, snowfalls) if s is not None and s > 15]
+        recent_str = f"Recent snowfall (past 15 days): {recent_total:.0f} cm total."
+        if big_events:
+            biggest = max(big_events, key=lambda x: x[1])
+            recent_str += (
+                f" {len(big_events)} large event(s) >15 cm/day"
+                f" (largest: {biggest[1]:.0f} cm on {biggest[0]})."
+            )
+        else:
+            recent_str += " No single-day events above 15 cm."
+        parts.append(recent_str)
+    except Exception as e:
+        parts.append(f"Recent snowfall unavailable: {e}")
+
+    # --- Seasonal accumulation (only when in-season) ---
+    season_start = _season_start_for_range(range_name, today)
+    if season_start is not None:
+        try:
+            r = _session.get(
+                "https://archive-api.open-meteo.com/v1/archive",
+                params={
+                    **base_params,
+                    "start_date": season_start.isoformat(),
+                    "end_date": archive_end,
+                    "daily": ["snowfall_sum"],
+                    "timezone": "UTC",
+                },
+                timeout=20,
+            )
+            r.raise_for_status()
+            d = r.json().get("daily", {})
+            snowfalls = d.get("snowfall_sum", [])
+            seasonal_total = sum(s for s in snowfalls if s is not None)
+            parts.append(
+                f"Seasonal accumulation since {season_start.strftime('%-d %b')}: {seasonal_total:.0f} cm."
+            )
+        except Exception as e:
+            parts.append(f"Seasonal data unavailable: {e}")
+
     return " ".join(parts)
 
 
@@ -446,9 +540,11 @@ def fetch_weather_for_coords(
 
     historical_text = ""
     try:
-        historical_text = _fetch_historical_text(lat, lon, today, elevation_m=elevation_m)
+        from src.geo import classify_range
+        range_name = classify_range(lat, lon)
+        historical_text = _fetch_snowfall_summary(lat, lon, today, range_name, elevation_m=elevation_m)
     except Exception as e:
-        errors.append(f"Historical data unavailable: {e}")
+        errors.append(f"Snowfall data unavailable: {e}")
 
     today_str = today.isoformat()
     return WeatherSummary(

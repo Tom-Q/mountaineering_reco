@@ -40,9 +40,11 @@ from src.weather import fetch_weather_for_coords, route_coords
 WEATHER_TOOL: dict = {
     "name": "get_weather_forecast",
     "description": (
-        "Fetch a 7-day weather forecast and a 90-day snowfall history for a location. "
+        "Fetch a 7-day weather forecast and a snowfall history for a location. "
         "Returns daily snowfall, wind speed, wind gusts, 0°C isotherm (refreeze and melt), "
         "night cloud cover, and min/max temperature. "
+        "Snowfall history includes recent loading events (past 15 days) and, when in-season, "
+        "total accumulation since the season start — windows are range-aware. "
         "Use this to assess whether a route is in safe condition weather-wise."
     ),
     "input_schema": {
@@ -209,6 +211,56 @@ GET_OUTING_DETAIL_TOOL: dict = {
     },
 }
 
+MAKE_ROUTE_TOOL: dict = {
+    "name": "make_route",
+    "description": (
+        "Construct a route object for a route not found on Camptocamp — e.g. from a "
+        "guidebook, user description, or web search. Returns a route dict in the same "
+        "shape as fetch_route, usable with get_weather_forecast and get_avalanche_bulletin. "
+        "Provide lat/lon only if you have high confidence (e.g. from a web search result). "
+        "If omitted, the tool geocodes from `location` automatically via Nominatim — "
+        "prefer letting the tool do this rather than estimating coordinates yourself."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Route name.",
+            },
+            "location": {
+                "type": "string",
+                "description": "Area or massif name, e.g. 'Patagonia / Fitzroy' or 'Karakoram / Baltoro'.",
+            },
+            "lat": {
+                "type": "number",
+                "description": "Latitude (WGS84). Omit to let the tool geocode from location.",
+            },
+            "lon": {
+                "type": "number",
+                "description": "Longitude (WGS84). Omit to let the tool geocode from location.",
+            },
+            "grades": {
+                "type": "object",
+                "description": "Grade fields using the same keys as fetch_route (alpine_grade, rock_grade, ice_grade, mixed_grade, engagement, etc.).",
+            },
+            "elevation_max_m": {
+                "type": "integer",
+                "description": "Summit elevation in metres.",
+            },
+            "description": {
+                "type": "string",
+                "description": "Route description or notes from the source.",
+            },
+            "source": {
+                "type": "string",
+                "description": "Where this information comes from, e.g. 'Piola guidebook', 'user', 'Mountain Project'.",
+            },
+        },
+        "required": ["name", "location"],
+    },
+}
+
 ALL_TOOLS: list[dict] = [
     WEATHER_TOOL,
     AVALANCHE_TOOL,
@@ -217,6 +269,7 @@ ALL_TOOLS: list[dict] = [
     FETCH_ROUTE_TOOL,
     GET_OUTING_LIST_TOOL,
     GET_OUTING_DETAIL_TOOL,
+    MAKE_ROUTE_TOOL,
 ]
 
 # ---------------------------------------------------------------------------
@@ -352,6 +405,39 @@ def _handle_get_outing_detail(tool_input: dict) -> dict:
     }
 
 
+def _handle_make_route(tool_input: dict) -> dict:
+    from src.geo import geocode_location
+    lat = tool_input.get("lat")
+    lon = tool_input.get("lon")
+    if lat is None or lon is None:
+        coords = geocode_location(tool_input["location"])
+        if coords:
+            lat, lon = coords
+    grades = tool_input.get("grades") or {}
+    return {
+        "id": None,
+        "camptocamp": False,
+        "source": tool_input.get("source", "user"),
+        "title": tool_input["name"],
+        "area": tool_input["location"],
+        "activities": [],
+        "alpine_grade": grades.get("alpine_grade"),
+        "rock_grade": grades.get("rock_grade"),
+        "ice_grade": grades.get("ice_grade"),
+        "mixed_grade": grades.get("mixed_grade"),
+        "engagement": grades.get("engagement"),
+        "risk": grades.get("risk"),
+        "elevation_max_m": tool_input.get("elevation_max_m"),
+        "height_diff_up_m": None,
+        "coords": {"lat": lat, "lon": lon} if lat is not None else None,
+        "description": tool_input.get("description", ""),
+        "remarks": "",
+        "gear": "",
+        "external_resources": "",
+        "camptocamp_url": None,
+    }
+
+
 def _handle_get_avalanche_bulletin(tool_input: dict) -> dict:
     lat = tool_input["latitude"]
     lon = tool_input["longitude"]
@@ -398,6 +484,7 @@ _HANDLERS: dict[str, Any] = {
     "fetch_route": _handle_fetch_route,
     "get_outing_list": _handle_get_outing_list,
     "get_outing_detail": _handle_get_outing_detail,
+    "make_route": _handle_make_route,
 }
 
 
