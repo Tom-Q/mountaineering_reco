@@ -21,7 +21,7 @@ _MAX_CHAT_TURNS = 40
 
 def _format_profile(user_params: dict) -> str:
     """Format the climber's grade profile as a system-prompt block."""
-    mapping = [
+    grade_mapping = [
         ("rock_onsight", "Rock onsight"),
         ("rock_trad",    "Rock trad"),
         ("ice_max",      "Ice"),
@@ -29,10 +29,26 @@ def _format_profile(user_params: dict) -> str:
         ("alpine_max",   "Alpine"),
     ]
     lines = ["## Climber profile (baseline — user may adjust in conversation)"]
-    for key, label in mapping:
+    for key, label in grade_mapping:
         val = user_params.get(key)
         if val:
             lines.append(f"- {label}: {val}")
+
+    risk_mapping = [
+        ("engagement_max", "Max engagement"),
+        ("risk_max",       "Max objective risk"),
+        ("exposition_max", "Max exposition"),
+        ("equipment_min",  "Min equipment in place"),
+    ]
+    risk_lines = []
+    for key, label in risk_mapping:
+        val = user_params.get(key)
+        if val:
+            risk_lines.append(f"- {label}: {val}")
+    if risk_lines:
+        lines.append("")
+        lines.extend(risk_lines)
+
     return "\n".join(lines)
 
 

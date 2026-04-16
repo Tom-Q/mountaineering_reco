@@ -150,13 +150,20 @@ def _fmt_time(hours: float | None) -> str:
     return f"{int(round(hours / 24))}d"
 
 
-def _build_user_params(rock_onsight, rock_trad, ice_max, mixed_max, alpine_max) -> dict:
+def _build_user_params(
+    rock_onsight, rock_trad, ice_max, mixed_max, alpine_max,
+    engagement_max=None, risk_max=None, exposition_max=None, equipment_min=None,
+) -> dict:
     return {
-        "rock_onsight": rock_onsight,
-        "rock_trad":    None if rock_trad == "N/A" else rock_trad,
-        "ice_max":      None if ice_max   == "—"   else ice_max,
-        "mixed_max":    None if mixed_max == "—"   else mixed_max,
-        "alpine_max":   alpine_max,
+        "rock_onsight":    rock_onsight,
+        "rock_trad":       None if rock_trad == "N/A" else rock_trad,
+        "ice_max":         None if ice_max   == "—"   else ice_max,
+        "mixed_max":       None if mixed_max == "—"   else mixed_max,
+        "alpine_max":      alpine_max,
+        "engagement_max":  engagement_max,
+        "risk_max":        risk_max,
+        "exposition_max":  exposition_max,
+        "equipment_min":   equipment_min,
     }
 
 
@@ -343,7 +350,8 @@ with tab1:
                     for event in chat_alpinist(
                         st.session_state["api_messages"],
                         date.today(),
-                        user_params=_build_user_params(rock_onsight, rock_trad, ice_max, mixed_max, alpine_max),
+                        user_params=_build_user_params(rock_onsight, rock_trad, ice_max, mixed_max, alpine_max,
+                                                       engagement_max, risk_max, exposition_max, equipment_min),
                     ):
                         if event["type"] == "text":
                             accumulated += event["text"]

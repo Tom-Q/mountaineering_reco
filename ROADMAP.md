@@ -2,31 +2,9 @@
 
 ## Architecture evolution
 
-### Phase 1 — Tool use ✅ Mostly done
+### Phase 1 — Tool use ✅ Done
 
-Camptocamp, weather, and avalanche are exposed as callable tools in `src/tools.py` with strict input/output contracts. Streaming agentic loop in the chat tab calls them.
-
-Remaining:
-- Grade filtering not yet exposed as a tool — Claude can't call `rank_routes()` directly from chat. Logic is in `src/grades.py`; wrapping it in a tool is the last piece.
-
-**Architecture patterns still to consider (informed by dreamiurg/claude-mountaineering-skills):**
-
-- **Multi-agent parallelism** — dispatch separate fetch agents simultaneously (one per data source), each returning a strict JSON contract, then merge results. Reduces latency and keeps concerns separated. Worth exploring once basic tool use is working; not necessarily the right first step.
-- **Writer + Reviewer agent separation** — a dedicated writer agent generates the report from a structured data package; a separate reviewer agent (potentially a stronger model) validates factual consistency, completeness, and safety before presenting to user. This is almost certainly the right pattern: it catches hallucinations and formatting issues without making the main agent prompt unwieldy.
-- **Graceful degradation with explicit gaps** — every source failure is logged to a `gaps` array that flows through to the final output. Missing data is never silently dropped; it appears in a visible "Information Gaps" section with manual lookup links. Adopt this regardless of agent architecture.
-
-### Phase 2 — Chat tab ✅ Mostly done
-
-- `st.chat_message` / `st.chat_input` UI ✅
-- Session-level conversation history (UI + API formats) ✅
-- Streaming agentic loop with tool calling ✅
-- Climber grade profile injected into system prompt ✅
-- Coexists with route finder tabs ✅
-
-Remaining gaps:
-- System prompt doesn't actively instruct Claude to ask clarifying questions
-- Tool results (weather data, route summaries) not shown inline — only status indicators, then prose synthesis
-- Sidebar risk/engagement preferences not passed to chat context, only climbing grades are
+### Phase 2 — Chat tab ✅ Done
 
 ### Phase 3 — Hut data
 Build a local hut database to eliminate per-request API calls for static hut info.
@@ -66,6 +44,9 @@ Build a curated local vector store for static route beta.
 
 ## Backlog
 
+### Multi-agent parallelism
+Dispatch separate fetch agents simultaneously (one per data source), each returning a strict JSON contract, then merge results. Reduces latency and keeps concerns separated.
+
 ### Report template overhaul
 Current route analysis output is unstructured. Adopt a proper report template with consistent sections:
 Overview → Route description → Crux → Hazards → Current Conditions (weather + avalanche + daylight) → Trip Reports → Information Gaps → Sources.
@@ -81,9 +62,7 @@ Notes:
 Add sunrise/sunset/civil twilight for the route's coordinates and planned date. Useful for alpine start planning.
 Use the `astral` Python library (pure Python, no API key). Already used by dreamiurg.
 
-### Weather: verify elevation= parameter
-✅ Done — `_build_all_days` and `_fetch_historical_text` now accept and pass `elevation_m` to Open-Meteo.
-
+### Weather: multiple elevation bands
 Consider fetching weather at multiple elevation bands (trailhead, mid-route, summit) for routes with large altitude gain. High-altitude wind and temperature can differ significantly from the base — relevant for routes with >1000m of elevation difference. The weather tool currently accepts a single `elevation_m`; extending it to accept a list of elevations and return one forecast per band would cover this.
 
 ### C2C profile integration
@@ -95,9 +74,6 @@ Load grades from a public Camptocamp numeric user ID and populate the sidebar se
 
 ### Weather prompt verbosity
 LLM weather output is too verbose. Fix: instruct the model to report facts rather than draw stability conclusions.
-
-### Weather checkbox cache split
-Cache key is `(route_id, weather_check)` — toggling the checkbox forces a full re-run including LLM call. Weather fetch and analysis should be cached independently.
 
 ### NA source integration (good-to-have, worldwide applicability)
 Add support for North American mountaineering sources. These are lower priority than European coverage but would make the app more universally useful:
