@@ -2,7 +2,18 @@
 Geographic utilities: range classification and location geocoding.
 
 classify_range(lat, lon)     → range key used by weather.py for season windows.
-geocode_location(text)       → (lat, lon) via Nominatim, with persistent cache.
+geocode_location(text)       → GeocodingResult dict or None, with persistent cache.
+
+GeocodingResult shape:
+    {
+        "lat":          float,
+        "lon":          float,
+        "display_name": str,    # full Nominatim location string
+        "osm_class":    str,    # e.g. "natural", "place", "tourism"
+        "osm_type":     str,    # e.g. "peak", "village", "alpine_hut"
+        "importance":   float | None,  # Nominatim 0–1 prominence score
+        "query_used":   str,    # which query string produced this result
+    }
 """
 
 from __future__ import annotations
@@ -137,11 +148,11 @@ def classify_range(lat: float, lon: float) -> str:
 _GEOCODE_CACHE_PATH = Path(".cache/geocoding_cache.json")
 _NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 _NOMINATIM_HEADERS = {"User-Agent": "mountaineering-reco/1.0"}
-_geocode_cache: dict[str, list[float]] | None = None
+_geocode_cache: dict | None = None
 _last_nominatim_request: float = 0.0
 
 
-def _load_geocode_cache() -> dict[str, list[float]]:
+def _load_geocode_cache() -> dict:
     global _geocode_cache
     if _geocode_cache is None:
         try:
@@ -158,8 +169,52 @@ def _save_geocode_cache() -> None:
         json.dump(_geocode_cache, f, indent=2)
 
 
-def _nominatim_query(query: str) -> tuple[float, float] | None:
-    """Single Nominatim request, rate-limited to 1 req/sec as required by ToS."""
+# Classes that are never relevant to mountaineering — always skip.
+# Intentionally minimal: altitude restaurants, mountain huts, cable-car stations,
+# villages as trailheads are all legitimate and must not be filtered out.
+_COMMERCIAL_CLASSES = frozenset({"shop", "office", "industrial"})
+
+
+def _passes_permissive(hit: dict) -> bool:
+    """Minimal filter for full-context queries: reject only clearly commercial results."""
+    return hit.get("class", "") not in _COMMERCIAL_CLASSES
+
+
+def _passes_strict(hit: dict) -> bool:
+    """
+    Tighter filter for isolated single-word queries where ambiguity is high.
+
+    Accepts natural features unconditionally. Accepts geographic boundaries
+    (national parks, protected areas) but NOT administrative boundaries, which
+    are typically urban/political divisions (e.g. Melbourne's Fitzroy suburb is
+    tagged boundary/administrative in OSM). Everything else requires importance > 0.4.
+    """
+    cls = hit.get("class", "")
+    typ = hit.get("type", "")
+    if cls in _COMMERCIAL_CLASSES:
+        return False
+    if cls == "natural":
+        return True  # peaks, mountain ranges, valleys — always accept
+    if cls == "boundary":
+        # Administrative boundaries are urban/political (e.g. Melbourne's Fitzroy suburb
+        # is tagged boundary/administrative). National parks and protected areas are fine.
+        return typ != "administrative"
+    try:
+        return float(hit.get("importance") or 0) > 0.4
+    except (TypeError, ValueError):
+        return False
+
+
+def _nominatim_query(query: str, strict: bool = False) -> dict | None:
+    """
+    Single Nominatim request, rate-limited to 1 req/sec (ToS requirement).
+
+    Fetches up to 5 candidates and returns full metadata for the first hit that
+    passes the filter. `strict=True` applies the tighter isolated-segment filter
+    for single-word queries where name collisions are most dangerous.
+
+    Returns a GeocodingResult dict or None.
+    """
     global _last_nominatim_request
     elapsed = time.time() - _last_nominatim_request
     if elapsed < 1.0:
@@ -167,50 +222,85 @@ def _nominatim_query(query: str) -> tuple[float, float] | None:
     try:
         r = requests.get(
             _NOMINATIM_URL,
-            params={"q": query, "format": "json", "limit": 1},
+            params={"q": query, "format": "json", "limit": 5},
             headers=_NOMINATIM_HEADERS,
             timeout=10,
         )
         _last_nominatim_request = time.time()
         r.raise_for_status()
-        results = r.json()
-        if results:
-            return float(results[0]["lat"]), float(results[0]["lon"])
+        filter_fn = _passes_strict if strict else _passes_permissive
+        for hit in r.json():
+            if filter_fn(hit):
+                importance = hit.get("importance")
+                return {
+                    "lat":          float(hit["lat"]),
+                    "lon":          float(hit["lon"]),
+                    "display_name": hit.get("display_name", ""),
+                    "osm_class":    hit.get("class", ""),
+                    "osm_type":     hit.get("type", ""),
+                    "importance":   float(importance) if importance is not None else None,
+                    "query_used":   query,
+                }
     except Exception:
         pass
     return None
 
 
-def geocode_location(location_text: str) -> tuple[float, float] | None:
+def geocode_location(location_text: str) -> dict | None:
     """
-    Translate a place name to (lat, lon) via Nominatim.
+    Translate a place name to a GeocodingResult dict via Nominatim.
 
-    For slash-separated strings like "Massif du Mont-Blanc / Aiguilles de Chamonix",
-    tries the rightmost segment first (most specific), then falls back to the leftmost.
-    Results are cached permanently in .cache/geocoding_cache.json — geography doesn't change.
+    Query strategy for slash-separated strings like
+    "Patagonia / Fitzroy" or "Massif du Mont-Blanc / Aiguilles de Chamonix":
+
+    1. Full context string (segments joined with spaces) — permissive filter.
+       Most context; avoids single-word collisions like "Fitzroy" → Melbourne.
+    2. Rightmost segment alone — strict filter.
+       Fallback when combined string finds nothing.
+    3. Leftmost segment alone — strict filter.
+       Broadest fallback.
+
+    Results (including metadata) are cached permanently so confidence signals
+    are preserved across sessions. Legacy cache entries in the old [lat, lon]
+    list format are read back with osm_class="unknown" without crashing.
     """
     cache = _load_geocode_cache()
     if location_text in cache:
         cached = cache[location_text]
-        return float(cached[0]), float(cached[1])
+        # Backward compatibility: old cache stored bare [lat, lon] lists
+        if isinstance(cached, list):
+            return {
+                "lat":          float(cached[0]),
+                "lon":          float(cached[1]),
+                "display_name": "unknown (legacy cache entry — re-geocode for full metadata)",
+                "osm_class":    "unknown",
+                "osm_type":     "unknown",
+                "importance":   None,
+                "query_used":   "unknown",
+            }
+        return cached
 
     segments = [s.strip() for s in location_text.split("/") if s.strip()]
-    if len(segments) >= 2:
-        # Rightmost (most specific) first, leftmost (broader) as fallback
-        queries = [segments[-1], segments[0]]
-    elif segments:
-        queries = [segments[0]]
-    else:
+    if not segments:
         return None
 
+    if len(segments) >= 2:
+        query_attempts = [
+            (" ".join(segments), False),  # full context, permissive
+            (segments[-1],       True),   # rightmost segment, strict
+            (segments[0],        True),   # leftmost segment, strict
+        ]
+    else:
+        query_attempts = [(segments[0], False)]  # single segment, permissive
+
     result = None
-    for query in queries:
-        result = _nominatim_query(query)
+    for query, strict in query_attempts:
+        result = _nominatim_query(query, strict=strict)
         if result:
             break
 
     if result:
-        cache[location_text] = [result[0], result[1]]
+        cache[location_text] = result
         _save_geocode_cache()
 
     return result

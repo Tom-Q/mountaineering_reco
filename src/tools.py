@@ -218,8 +218,12 @@ MAKE_ROUTE_TOOL: dict = {
         "guidebook, user description, or web search. Returns a route dict in the same "
         "shape as fetch_route, usable with get_weather_forecast and get_avalanche_bulletin. "
         "Provide lat/lon only if you have high confidence (e.g. from a web search result). "
-        "If omitted, the tool geocodes from `location` automatically via Nominatim — "
-        "prefer letting the tool do this rather than estimating coordinates yourself."
+        "If omitted, the tool geocodes from `location` automatically via Nominatim. "
+        "The result always includes a `geocoding_note` field. When coordinates were "
+        "geocoded (not supplied explicitly), you MUST report the geocoding_note to the "
+        "user before calling weather or avalanche tools. If importance < 0.4 or the "
+        "display_name looks geographically wrong, ask the user to confirm or supply "
+        "explicit coordinates before proceeding with weather data."
     ),
     "input_schema": {
         "type": "object",
@@ -409,10 +413,29 @@ def _handle_make_route(tool_input: dict) -> dict:
     from src.geo import geocode_location
     lat = tool_input.get("lat")
     lon = tool_input.get("lon")
-    if lat is None or lon is None:
-        coords = geocode_location(tool_input["location"])
-        if coords:
-            lat, lon = coords
+
+    if lat is not None and lon is not None:
+        geocoding_note = "Coordinates provided explicitly — not geocoded."
+    else:
+        geo = geocode_location(tool_input["location"])
+        if geo:
+            lat, lon = geo["lat"], geo["lon"]
+            importance = geo["importance"]
+            importance_str = f"{importance:.2f}" if importance is not None else "unknown"
+            geocoding_note = (
+                f"Coordinates geocoded via Nominatim: \"{geo['display_name']}\" "
+                f"(OSM: {geo['osm_class']}/{geo['osm_type']}, "
+                f"importance: {importance_str}, "
+                f"query: \"{geo['query_used']}\"). "
+                f"Verify this is the intended location before relying on weather data."
+            )
+        else:
+            geocoding_note = (
+                "Geocoding failed — no coordinates found for this location. "
+                "Weather and avalanche tools cannot be used for this route. "
+                "Ask the user to supply explicit coordinates if needed."
+            )
+
     grades = tool_input.get("grades") or {}
     return {
         "id": None,
@@ -430,6 +453,7 @@ def _handle_make_route(tool_input: dict) -> dict:
         "elevation_max_m": tool_input.get("elevation_max_m"),
         "height_diff_up_m": None,
         "coords": {"lat": lat, "lon": lon} if lat is not None else None,
+        "geocoding_note": geocoding_note,
         "description": tool_input.get("description", ""),
         "remarks": "",
         "gear": "",

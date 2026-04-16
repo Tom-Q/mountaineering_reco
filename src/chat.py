@@ -63,7 +63,7 @@ def chat_alpinist(
     while True:
         with _get_client().messages.stream(
             model=_CHAT_MODEL,
-            max_tokens=1024,
+            max_tokens=4096,
             system=system,
             messages=working,
             tools=ALL_TOOLS,
@@ -115,3 +115,4 @@ def chat_alpinist(
         tool_msg = {"role": "user", "content": tool_results}
         working.append(tool_msg)
         new_messages.append(tool_msg)
+        yield {"type": "text", "text": "\n\n"}
