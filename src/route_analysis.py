@@ -6,6 +6,7 @@ into a structured route analysis. Grade filtering and route ranking are not
 done here — those live in src/grades.py.
 """
 
+import json
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -16,10 +17,14 @@ from src.client import _get_client
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _MODEL = "claude-haiku-4-5-20251001"
+# Haiku is fast and cheap for the reviewer's structured-output task.
+# Switch to claude-sonnet-4-6 if invented-condition misses become a problem in practice.
+_REVIEWER_MODEL = "claude-haiku-4-5-20251001"
 
 _topo_session = requests_cache.CachedSession(".cache/topo_cache", expire_after=3600)
 _ROUTE_ANALYSIS_PROMPT = (_PROMPTS_DIR / "route_analysis.md").read_text()
 _ROUTE_SUMMARY_PROMPT  = (_PROMPTS_DIR / "route_summary.md").read_text()
+_ROUTE_REVIEWER_PROMPT = (_PROMPTS_DIR / "route_reviewer.md").read_text()
 
 # Skip non-text sources (videos, book purchase pages) that would return empty or
 # irrelevant content. "tvmountain" and "eosya" are video/subscription platforms.
@@ -249,6 +254,41 @@ def build_analysis_prompt(
     return "\n\n".join(parts)
 
 
+def _review_analysis(user_msg: str, analysis: str, weather, avalanche) -> str:
+    """
+    Run the reviewer LLM call against the writer's output.
+
+    Returns the (possibly revised) analysis string. Falls back to the original
+    analysis if the verdict is pass, JSON parsing fails, or revised_output is empty.
+    """
+    reviewer_msg = (
+        "## Source data\n"
+        + user_msg
+        + "\n\n---\n\n"
+        "## Analysis to review\n"
+        + analysis
+    )
+    response = _get_client().messages.create(
+        model=_REVIEWER_MODEL,
+        max_tokens=_max_tokens_for_analysis(weather, avalanche),
+        system=_ROUTE_REVIEWER_PROMPT,
+        messages=[{"role": "user", "content": reviewer_msg}],
+    )
+    raw = response.content[0].text.strip()
+    # Strip markdown code fences if the model wraps the JSON
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[^\n]*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+    try:
+        verdict = json.loads(raw)
+    except Exception:
+        return analysis  # malformed JSON — use writer output unchanged
+
+    if verdict.get("verdict") == "revise" and verdict.get("revised_output"):
+        return verdict["revised_output"].strip()
+    return analysis
+
+
 def _max_tokens_for_analysis(weather, avalanche) -> int:
     if weather is None:
         return 2000
@@ -284,4 +324,5 @@ def analyze_route(
         system=_ROUTE_ANALYSIS_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
     )
-    return response.content[0].text.strip()
+    analysis = response.content[0].text.strip()
+    return _review_analysis(user_msg, analysis, weather, avalanche)
