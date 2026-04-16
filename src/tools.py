@@ -19,6 +19,7 @@ Usage:
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any
 
@@ -265,6 +266,46 @@ MAKE_ROUTE_TOOL: dict = {
     },
 }
 
+SHOW_IMAGES_TOOL: dict = {
+    "name": "show_images",
+    "description": (
+        "Queue one or more images for the user to view in the gallery panel. "
+        "Call this whenever you have image URLs worth showing — route photos from fetch_route, "
+        "topo diagrams, conditions shots from trip reports, or any other relevant visuals. "
+        "Images appear in a side panel with prev/next navigation. "
+        "Each image needs a caption and optionally a source URL. "
+        "The tool returns immediately; images appear in the panel as soon as you call it."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "images": {
+                "type": "array",
+                "description": "List of images to queue for display.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "Public https:// URL of the image.",
+                        },
+                        "caption": {
+                            "type": "string",
+                            "description": "Short description of what this image shows.",
+                        },
+                        "source_url": {
+                            "type": "string",
+                            "description": "URL of the page where the image was found (for attribution).",
+                        },
+                    },
+                    "required": ["url", "caption"],
+                },
+            },
+        },
+        "required": ["images"],
+    },
+}
+
 ALL_TOOLS: list[dict] = [
     WEATHER_TOOL,
     AVALANCHE_TOOL,
@@ -274,6 +315,7 @@ ALL_TOOLS: list[dict] = [
     GET_OUTING_LIST_TOOL,
     GET_OUTING_DETAIL_TOOL,
     MAKE_ROUTE_TOOL,
+    SHOW_IMAGES_TOOL,
 ]
 
 # ---------------------------------------------------------------------------
@@ -349,11 +391,64 @@ def _handle_search_routes_by_area(tool_input: dict) -> dict:
     }
 
 
+_C2C_CDN = "https://media.camptocamp.org/c2corg-active"
+
+
+def _c2c_image_url(filename: str, size: str = "MI") -> str:
+    """Build a Camptocamp CDN URL with the correct size suffix.
+
+    The API returns bare filenames like '1237326095_1984991001.jpg'.
+    The CDN serves sized variants by inserting a suffix before the extension:
+      MI = medium (displayed on topo pages)
+      BI = big (full-size view)
+    """
+    if "." in filename:
+        base, ext = filename.rsplit(".", 1)
+        return f"{_C2C_CDN}/{base}{size}.{ext}"
+    return f"{_C2C_CDN}/{filename}"
+
+
+def _extract_c2c_images(route: dict, description_ids: set[int] | None = None) -> list[dict]:
+    """Return images associated with a Camptocamp route as gallery-ready dicts.
+
+    Images whose document IDs appear in description_ids (i.e. explicitly embedded
+    in the route description via [img=ID] markup) are marked in_description=True
+    and sorted first — they are typically topos or annotated photos chosen by
+    the route author.
+    """
+    raw_images = route.get("associations", {}).get("images", [])
+    description_ids = description_ids or set()
+    result = []
+    for img in raw_images:
+        filename = img.get("filename")
+        if not filename:
+            continue
+        doc_id = img.get("document_id")
+        locales = img.get("locales") or []
+        title = next(
+            (l.get("title", "") for l in locales if l.get("lang") == "fr"),
+            locales[0].get("title", "") if locales else "",
+        )
+        result.append({
+            "url": _c2c_image_url(filename),
+            "caption": title or filename,
+            "source_url": f"https://www.camptocamp.org/images/{doc_id}" if doc_id else None,
+            "in_description": doc_id in description_ids,
+        })
+    # Description images first, then the rest
+    result.sort(key=lambda x: (0 if x["in_description"] else 1))
+    return result
+
+
 def _handle_fetch_route(tool_input: dict) -> dict:
     route_id = int(tool_input["route_id"])
     route = fetch_route(route_id)
     locale = route.get("_locale") or {}
     coords = route_coords(route)
+    description = (locale.get("description") or "")
+    # Parse [img=ID ...] markup from the description to identify author-chosen images
+    desc_image_ids = {int(m) for m in re.findall(r'\[img=(\d+)', description)}
+    images = _extract_c2c_images(route, description_ids=desc_image_ids)
     return {
         "id": route_id,
         "title": route.get("title"),
@@ -368,11 +463,12 @@ def _handle_fetch_route(tool_input: dict) -> dict:
         "elevation_max_m": route.get("elevation_max"),
         "height_diff_up_m": route.get("height_diff_up"),
         "coords": {"lat": coords[0], "lon": coords[1]} if coords else None,
-        "description": (locale.get("description") or "")[:2000],
+        "description": description[:2000],
         "remarks": (locale.get("remarks") or "")[:500],
         "gear": (locale.get("gear") or "")[:500],
         "external_resources": (locale.get("external_resources") or "")[:300],
         "camptocamp_url": f"https://www.camptocamp.org/routes/{route_id}",
+        "images": images,
     }
 
 
@@ -398,15 +494,20 @@ def _handle_get_outing_detail(tool_input: dict) -> dict:
     outing_id = int(tool_input["outing_id"])
     outing = fetch_outing_full(outing_id)
     locale = outing.get("_locale") or {}
-    return {
+    associated_routes = outing.get("associations", {}).get("routes", [])
+    result = {
         "outing_id": outing_id,
         "date": outing.get("date_start"),
         "condition_rating": outing.get("condition_rating"),
         "elevation_max_m": outing.get("elevation_max"),
+        "partial_trip": outing.get("partial_trip") or False,
+        "associated_route_ids": [r["document_id"] for r in associated_routes],
+        "multi_route": len(associated_routes) > 1,
         "conditions": (locale.get("conditions") or "")[:1500],
         "weather": (locale.get("weather") or "")[:400],
         "camptocamp_url": f"https://www.camptocamp.org/outings/{outing_id}",
     }
+    return result
 
 
 def _handle_make_route(tool_input: dict) -> dict:
@@ -462,6 +563,20 @@ def _handle_make_route(tool_input: dict) -> dict:
     }
 
 
+def _handle_show_images(tool_input: dict) -> dict:
+    """
+    Queue images for the gallery panel via the _images side-channel.
+
+    The actual gallery update is handled by app.py, which intercepts the
+    _images key before sending the result to the API.
+    """
+    images = tool_input.get("images", [])
+    return {
+        "_images": images,
+        "queued": len(images),
+    }
+
+
 def _handle_get_avalanche_bulletin(tool_input: dict) -> dict:
     lat = tool_input["latitude"]
     lon = tool_input["longitude"]
@@ -490,10 +605,34 @@ def _handle_get_avalanche_bulletin(tool_input: dict) -> dict:
             "fetch_error": b.fetch_error,
         }
 
-    return {
+    # Side-channel: surface Météo-France bulletin images to the gallery.
+    # These are binary blobs (not public URLs) so they travel via _image_blobs
+    # rather than _images. app.py intercepts this key and writes bytes to
+    # st.session_state["image_blobs"].
+    image_blobs = {}
+    for b in bulletins:
+        if b.image_meteo:
+            key = f"bra_meteo_{b.massif_name or 'unknown'}"
+            image_blobs[key] = {
+                "data": b.image_meteo,
+                "caption": f"Météo overview — {b.massif_name or 'bulletin'}",
+                "source_url": "https://meteofrance.com",
+            }
+        if b.image_7days:
+            key = f"bra_7days_{b.massif_name or 'unknown'}"
+            image_blobs[key] = {
+                "data": b.image_7days,
+                "caption": f"7 derniers jours — {b.massif_name or 'bulletin'}",
+                "source_url": "https://meteofrance.com",
+            }
+
+    result: dict = {
         "coords": {"lat": lat, "lon": lon},
         "bulletins": [_serialise(b) for b in bulletins],
     }
+    if image_blobs:
+        result["_image_blobs"] = image_blobs
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +648,7 @@ _HANDLERS: dict[str, Any] = {
     "get_outing_list": _handle_get_outing_list,
     "get_outing_detail": _handle_get_outing_detail,
     "make_route": _handle_make_route,
+    "show_images": _handle_show_images,
 }
 
 

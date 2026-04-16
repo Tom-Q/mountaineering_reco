@@ -117,11 +117,27 @@ def chat_alpinist(
             error = None
             try:
                 result = dispatch_tool(block.name, block.input)
+                # Strip side-channel keys before sending to Claude; yield as
+                # a separate event so app.py can populate the image gallery.
+                images = result.pop("_images", None)
+                image_blobs = result.pop("_image_blobs", None)
+                if images is not None or image_blobs is not None:
+                    yield {
+                        "type": "tool_images",
+                        "images": images or [],
+                        "image_blobs": image_blobs or {},
+                    }
                 result_str = json.dumps(result)
             except Exception as e:
                 result_str = json.dumps({"error": str(e)})
                 error = str(e)
-            yield {"type": "tool_end", "name": block.name, "error": error}
+            # Yield the tool result for logging; truncate large payloads.
+            yield {
+                "type": "tool_end",
+                "name": block.name,
+                "error": error,
+                "result_preview": result_str[:2000] if not error else None,
+            }
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,

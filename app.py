@@ -1,3 +1,4 @@
+import json
 import re
 import streamlit as st
 from dotenv import load_dotenv
@@ -7,6 +8,7 @@ from branca.element import MacroElement
 from jinja2 import Template
 from streamlit_folium import st_folium
 from collections import Counter
+from pathlib import Path
 
 from datetime import date, datetime
 
@@ -25,6 +27,23 @@ from src.grades import (
     EXPOSITION, EXPOSITION_LABELS,
     EQUIPMENT, EQUIPMENT_LABELS,
 )
+
+_LOG_DIR = Path(".logs")
+_LOG_DIR.mkdir(exist_ok=True)
+
+
+def _log(entry: dict) -> None:
+    """Append one JSON-Lines entry to today's chat log.
+
+    Fields always present: ts (ISO-8601), type.
+    The log file lives at .logs/chat_YYYY-MM-DD.jsonl and is safe to tail -f.
+    Binary image blobs are never written; tool results are truncated to 2 kB.
+    """
+    entry["ts"] = datetime.now().isoformat(timespec="milliseconds")
+    log_path = _LOG_DIR / f"chat_{date.today()}.jsonl"
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
 
 def _tool_status_label(name: str, tool_input: dict) -> str:
     """Human-readable label for a tool call status indicator."""
@@ -55,12 +74,15 @@ def _tool_status_label(name: str, tool_input: dict) -> str:
         return f"Fetching trip report list for route #{tool_input.get('route_id')}"
     if name == "get_outing_detail":
         return f"Fetching trip report #{tool_input.get('outing_id')}"
+    if name == "show_images":
+        n = len(tool_input.get("images", []))
+        return f"Queuing {n} image{'s' if n != 1 else ''} for gallery"
     return f"Calling {name}..."
 
 
 def _render_chat_images(text: str, attached: list | None = None) -> None:
     """Render images for a chat message bubble.
-    - attached: list of bytes/PIL/URL strings from tool calls (Phase 2)
+    - attached: list of bytes/PIL/URL strings from tool calls
     - text: scanned for markdown ![alt](url) syntax embedded by Claude
     Images appear below the text in the same chat bubble.
     st.image() accepts URLs, bytes, PIL images, and numpy arrays.
@@ -72,6 +94,65 @@ def _render_chat_images(text: str, attached: list | None = None) -> None:
             st.image(img)
         except Exception:
             pass
+
+
+def _render_gallery() -> None:
+    """Render the image gallery panel (right column of the chat tab)."""
+    gallery: list[dict] = st.session_state.get("image_gallery", [])
+    blobs: dict = st.session_state.get("image_blobs", {})
+
+    st.markdown("#### Photos & images")
+
+    if not gallery:
+        st.caption("Images surfaced by the assistant will appear here.")
+        return
+
+    idx = st.session_state.get("gallery_index", 0)
+    idx = max(0, min(idx, len(gallery) - 1))
+    st.session_state["gallery_index"] = idx
+
+    item = gallery[idx]
+
+    # Resolve image data: URL string or bytes from blobs dict
+    blob_key = item.get("blob_key")
+    if blob_key and blob_key in blobs:
+        image_data = blobs[blob_key]
+    else:
+        image_data = item.get("url")
+
+    url = item.get("url", "")
+    if url.lower().endswith(".svg"):
+        # st.image() does not support SVG — show a clickable link instead
+        st.markdown(f"[Open diagram (SVG)]({url})")
+    elif image_data:
+        try:
+            st.image(image_data, width="stretch")
+        except Exception as e:
+            st.caption(f"Could not load image: {e}")
+
+    caption = item.get("caption", "")
+    source_url = item.get("source_url")
+    if caption:
+        st.caption(caption)
+    if source_url:
+        st.markdown(f"[Source]({source_url})", unsafe_allow_html=False)
+
+    # Navigation row
+    if len(gallery) > 1:
+        prev_col, counter_col, next_col = st.columns([1, 2, 1])
+        with prev_col:
+            if st.button("◀", key="gallery_prev", disabled=(idx == 0)):
+                st.session_state["gallery_index"] = idx - 1
+                st.rerun()
+        with counter_col:
+            st.markdown(
+                f"<div style='text-align:center;padding-top:6px'>{idx + 1} / {len(gallery)}</div>",
+                unsafe_allow_html=True,
+            )
+        with next_col:
+            if st.button("▶", key="gallery_next", disabled=(idx == len(gallery) - 1)):
+                st.session_state["gallery_index"] = idx + 1
+                st.rerun()
 
 
 # Pin GeoMan to a specific version to avoid slow @latest resolution on unpkg
@@ -308,6 +389,12 @@ if "api_messages" not in st.session_state:
         {"role": m["role"], "content": m["content"]}
         for m in st.session_state["chat_history"]
     ]
+if "image_gallery" not in st.session_state:
+    st.session_state["image_gallery"] = []
+if "gallery_index" not in st.session_state:
+    st.session_state["gallery_index"] = 0
+if "image_blobs" not in st.session_state:
+    st.session_state["image_blobs"] = {}
 
 tab1, tab2, tab3, tab4 = st.tabs(["Chat with AI", "Find routes", "Analyse a route", "About"])
 
@@ -322,79 +409,140 @@ with tab1:
         icon="⚠️",
     )
 
-    # Declare the messages container first so it occupies space above the input.
-    # New messages are rendered into this container, keeping the input pinned below.
-    messages = st.container()
-    user_input = st.chat_input("Ask anything about alpine routes, gear, or conditions...")
+    chat_col, gallery_col = st.columns([7, 3])
 
-    with messages:
-        for msg in st.session_state["chat_history"]:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-                _render_chat_images(msg["content"], msg.get("images"))
+    with gallery_col:
+        _render_gallery()
 
-        if user_input:
-            st.session_state["chat_history"].append({"role": "user", "content": user_input})
-            st.session_state["api_messages"].append({"role": "user", "content": user_input})
-            with st.chat_message("user"):
-                st.markdown(user_input)
+    with chat_col:
+        # Declare the messages container first so it occupies space above the input.
+        # New messages are rendered into this container, keeping the input pinned below.
+        messages = st.container()
+        user_input = st.chat_input("Ask anything about alpine routes, gear, or conditions...")
 
-            reply = ""
-            with st.chat_message("assistant"):
-                try:
-                    text_placeholder = st.empty()
-                    accumulated = ""
-                    current_status = None
-                    current_status_label = None
+        with messages:
+            for msg in st.session_state["chat_history"]:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+                    _render_chat_images(msg["content"], msg.get("images"))
 
-                    for event in chat_alpinist(
-                        st.session_state["api_messages"],
-                        date.today(),
-                        user_params=_build_user_params(rock_onsight, rock_trad, ice_max, mixed_max, alpine_max,
-                                                       engagement_max, risk_max, exposition_max, equipment_min),
-                    ):
-                        if event["type"] == "text":
-                            accumulated += event["text"]
-                            text_placeholder.markdown(accumulated + "▌")
+            if user_input:
+                _log({"type": "user", "content": user_input})
+                st.session_state["chat_history"].append({"role": "user", "content": user_input})
+                st.session_state["api_messages"].append({"role": "user", "content": user_input})
+                with st.chat_message("user"):
+                    st.markdown(user_input)
 
-                        elif event["type"] == "tool_start":
-                            current_status_label = _tool_status_label(event["name"], event["input"])
-                            current_status = st.status(current_status_label + "...", expanded=False)
+                reply = ""
+                with st.chat_message("assistant"):
+                    try:
+                        text_placeholder = st.empty()
+                        accumulated = ""
+                        current_status = None
+                        current_status_label = None
 
-                        elif event["type"] == "tool_end":
-                            if current_status is not None:
-                                if event["error"]:
-                                    current_status.update(
-                                        label=f"⚠ {current_status_label} — failed",
-                                        state="error",
-                                    )
-                                else:
-                                    current_status.update(
-                                        label=f"✓ {current_status_label}",
-                                        state="complete",
-                                    )
-                                current_status = None
-                                current_status_label = None
+                        # Show a thinking indicator immediately — before any API
+                        # response arrives. Also re-shown after each tool call
+                        # while Claude processes results.
+                        def _show_thinking() -> None:
+                            thinking = "*Thinking...*"
+                            if accumulated.strip():
+                                text_placeholder.markdown(accumulated + "\n\n" + thinking)
+                            else:
+                                text_placeholder.markdown(thinking)
 
-                        elif event["type"] == "done":
-                            text_placeholder.markdown(accumulated)
-                            st.session_state["api_messages"].extend(event["new_api_messages"])
-                            reply = accumulated
+                        _show_thinking()
 
-                    _render_chat_images(reply)
-                except Exception as e:
-                    reply = f"Sorry, I couldn't reach the assistant ({e}). Please try again."
-                    st.markdown(reply)
+                        for event in chat_alpinist(
+                            st.session_state["api_messages"],
+                            date.today(),
+                            user_params=_build_user_params(rock_onsight, rock_trad, ice_max, mixed_max, alpine_max,
+                                                           engagement_max, risk_max, exposition_max, equipment_min),
+                        ):
+                            if event["type"] == "text":
+                                accumulated += event["text"]
+                                if accumulated.strip():
+                                    text_placeholder.markdown(accumulated + "▌")
 
-            st.session_state["chat_history"].append(
-                {"role": "assistant", "content": reply, "images": []}
-            )
+                            elif event["type"] == "tool_start":
+                                _log({"type": "tool_call", "name": event["name"], "input": event["input"]})
+                                current_status_label = _tool_status_label(event["name"], event["input"])
+                                current_status = st.status(current_status_label + "...", expanded=False)
 
-    if st.session_state["chat_history"]:
-        if st.button("Clear conversation", key="chat_clear"):
-            st.session_state["chat_history"] = []
-            st.session_state["api_messages"] = []
-            st.rerun()
+                            elif event["type"] == "tool_end":
+                                _log({
+                                    "type": "tool_result",
+                                    "name": event["name"],
+                                    "error": event["error"],
+                                    "result": event.get("result_preview"),
+                                })
+                                if current_status is not None:
+                                    if event["error"]:
+                                        current_status.update(
+                                            label=f"⚠ {current_status_label} — failed",
+                                            state="error",
+                                        )
+                                    else:
+                                        current_status.update(
+                                            label=f"✓ {current_status_label}",
+                                            state="complete",
+                                        )
+                                    current_status = None
+                                    current_status_label = None
+                                # Claude is now processing tool results — may be
+                                # several seconds before the next text event.
+                                _show_thinking()
+
+                            elif event["type"] == "tool_images":
+                                # Populate the gallery from the side-channel.
+                                # URL-based images go straight to the gallery list.
+                                new_images = []
+                                for img in event.get("images", []):
+                                    st.session_state["image_gallery"].append(img)
+                                    new_images.append({"url": img.get("url"), "caption": img.get("caption")})
+                                # Binary blobs (e.g. Météo-France bulletins) are stored
+                                # by key so st.image() can render them from bytes.
+                                for key, blob in event.get("image_blobs", {}).items():
+                                    st.session_state["image_blobs"][key] = blob["data"]
+                                    st.session_state["image_gallery"].append({
+                                        "blob_key": key,
+                                        "caption": blob["caption"],
+                                        "source_url": blob.get("source_url"),
+                                    })
+                                    new_images.append({"blob_key": key, "caption": blob["caption"]})
+                                if event.get("images") or event.get("image_blobs"):
+                                    st.session_state["gallery_index"] = 0
+                                if new_images:
+                                    _log({"type": "images_queued", "images": new_images})
+
+                            elif event["type"] == "done":
+                                text_placeholder.markdown(accumulated)
+                                st.session_state["api_messages"].extend(event["new_api_messages"])
+                                reply = accumulated
+                                _log({"type": "assistant", "content": reply})
+
+                        _render_chat_images(reply)
+                    except Exception as e:
+                        reply = f"Sorry, I couldn't reach the assistant ({e}). Please try again."
+                        _log({"type": "error", "error": str(e)})
+                        st.markdown(reply)
+
+                st.session_state["chat_history"].append(
+                    {"role": "assistant", "content": reply, "images": []}
+                )
+                # Rerun so the gallery column re-renders with any images added
+                # during the chat loop (gallery is rendered before the loop runs).
+                if st.session_state["image_gallery"]:
+                    st.rerun()
+
+        if st.session_state["chat_history"]:
+            if st.button("Clear conversation", key="chat_clear"):
+                st.session_state["chat_history"] = []
+                st.session_state["api_messages"] = []
+                st.session_state["image_gallery"] = []
+                st.session_state["gallery_index"] = 0
+                st.session_state["image_blobs"] = {}
+                st.rerun()
 
 # ===========================================================================
 # TAB 2 — Find routes: map + search + triage cards
