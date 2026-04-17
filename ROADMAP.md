@@ -20,17 +20,30 @@ Build a local hut database to eliminate per-request API calls for static hut inf
 
 **Storage:** local SQLite or JSON; refresh on a schedule (weekly/monthly for operational data, rarely for static).
 
-### Phase 4 — Topo scraping + RAG
+### Phase 4 — Topo scraping + RAG 🔄 In progress
+
 Build a curated local vector store for static route beta.
 
-**Corpus candidates:**
-- Guide/topo sites: `montagnes-magazine.com`, `passion-alpes.com`, `bergsteigen.com`, `sac-cas.ch`, `verticalpirate-escalade.com`
-- SummitPost — historical route descriptions; site is effectively abandonware, polite scraping defensible for personal use
-- Camptocamp route pages (complement to API data)
-- Park/reserve access rules (seasonal closures, permits — Écrins, Mercantour, etc.)
-- Approach road / parking notes where findable
+**SummitPost** — first corpus, scraping complete. ~2,300 mountaineering routes scraped into `data/summitpost.db` (structured metadata + section text + cover image). RAG indexing next.
 
-**Historical trip reports:** dated reports remain useful for seasonal pattern recognition and repeat-difficulty signals. Worth including with explicit date metadata so the LLM can weight them appropriately.
+**Further corpus candidates:**
+
+| Source | Coverage | Notes |
+|---|---|---|
+| `montagnes-magazine.com` | French Alps, Francophone Switzerland, Aosta Valley | High-quality topos for classic routes |
+| `passion-alpes.com` | Mont Blanc massif, Aiguilles Rouges | ~150 topos, mostly Mont Blanc area. Fetchable. |
+| `bergsteigen.com` | German-speaking Alps (Austria, Bavaria, Swiss-German) | Full route sheets: grade, gear, approach, season |
+| `sac-cas.ch` | Switzerland | SAC route database |
+| `verticalpirate-escalade.com` | French-language rock + alpine (Mediterranean + worldwide) | Guide's personal site; fetchable |
+| `desnivel.com` | Spain, Pyrenees | Spain's main alpinism publication. Spanish-language. |
+| `27crags.com` | Scandinavia | Free topo + logbook, strong Norwegian/Swedish coverage |
+| `hikr.org` | Alps multilingual | User trip reports in FR/DE/IT/EN. Strong Swiss/Austrian/Italian coverage. Bot-blocked. |
+| `mountainproject.com` | North America | Thin on European alpine, strong for NA rock and alpine |
+| `lemkeclimbs.com` | Alps | Rich English-language topo source |
+| Camptocamp route pages | Worldwide | Complement to API data already integrated |
+| Park/reserve access rules | France, Italy | Seasonal closures, permits — Écrins, Mercantour, etc. |
+
+**Historical trip reports:** dated reports remain useful for seasonal pattern recognition. Include with explicit date metadata so the LLM can weight recency appropriately.
 
 **Stack:** Chroma or LanceDB (local, no infrastructure). Embed with sentence-transformers or Claude. ~500–2000 documents total — manageable.
 

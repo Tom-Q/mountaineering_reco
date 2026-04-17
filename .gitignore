@@ -208,3 +208,8 @@ __marimo__/
 .cache/
 secrets/
 _external/
+
+# Scraper and data — kept in private repo (Tom-Q/summitpost_scraper)
+src/summitpost.py
+scripts/
+data/
