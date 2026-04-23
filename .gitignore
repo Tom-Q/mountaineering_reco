@@ -211,5 +211,6 @@ _external/
 
 # Scraper and data — kept in private repo (Tom-Q/summitpost_scraper)
 src/summitpost.py
-scripts/
+scripts/*
+!scripts/draw_ranges_map*
 data/
