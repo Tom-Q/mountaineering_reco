@@ -19,6 +19,7 @@ GeocodingResult shape:
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 
@@ -244,6 +245,13 @@ def _nominatim_query(query: str, strict: bool = False) -> dict | None:
     except Exception:
         pass
     return None
+
+
+def bbox_around(lat: float, lon: float, radius_km: float) -> tuple[float, float, float, float]:
+    """Return (lat_min, lat_max, lon_min, lon_max) bounding a circle of radius_km."""
+    delta_lat = radius_km / 111.0
+    delta_lon = radius_km / (111.0 * math.cos(math.radians(lat)))
+    return lat - delta_lat, lat + delta_lat, lon - delta_lon, lon + delta_lon
 
 
 def geocode_location(location_text: str) -> dict | None:

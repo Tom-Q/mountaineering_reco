@@ -306,6 +306,86 @@ SHOW_IMAGES_TOOL: dict = {
     },
 }
 
+SEARCH_DOCUMENTS_TOOL: dict = {
+    "name": "search_documents",
+    "description": (
+        "Search the local SummitPost database for route descriptions, approach notes, "
+        "gear lists, and other static beta. "
+        "Use for factual route information (what the route is like, gear needed, approach). "
+        "Works in any language — a French query will match English, German, and Italian content. "
+        "Not for conditions or weather — use get_outing_detail and get_weather_forecast for those. "
+        "Returns the most semantically relevant section chunks.\n\n"
+        "Geographic filtering — use at most one of:\n"
+        "  area: a named mountain range (e.g. 'Mont Blanc massif', 'Karakoram', 'Patagonia', "
+        "'Sierra Nevada', 'Japanese Alps'). Resolves to a bounding box from the ranges database.\n"
+        "  near: a place name (peak, village, hut, pass). Geocoded via Nominatim; combine with "
+        "radius_km to set the search radius (default 50 km).\n\n"
+        "To retrieve all sections for a specific route by ID, use retrieve_document instead."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "What you are looking for, in any language.",
+            },
+            "n_results": {
+                "type": "integer",
+                "description": "Number of section chunks to return (default 5, max 15).",
+            },
+            "section_heading": {
+                "type": "string",
+                "description": (
+                    "Optional: restrict to a specific section type. "
+                    "Common values: Overview, Approach, Route Description, "
+                    "Essential Gear, Getting There, Descent, Red Tape."
+                ),
+            },
+            "area": {
+                "type": "string",
+                "description": (
+                    "Named mountain range to restrict results to. "
+                    "Examples: 'Alps', 'Mont Blanc massif', 'Karakoram', 'Patagonia', "
+                    "'Cordillera Blanca', 'Sierra Nevada', 'Japanese Alps'. "
+                    "Mutually exclusive with near."
+                ),
+            },
+            "near": {
+                "type": "string",
+                "description": (
+                    "Place name to search around (peak, village, hut, valley). "
+                    "Geocoded automatically. Combine with radius_km. "
+                    "Mutually exclusive with area."
+                ),
+            },
+            "radius_km": {
+                "type": "number",
+                "description": "Search radius in km around the near location (default 50).",
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+RETRIEVE_DOCUMENT_TOOL: dict = {
+    "name": "retrieve_document",
+    "description": (
+        "Retrieve all sections for a specific SummitPost route by its numeric ID. "
+        "Use this for a deep-dive on one route once you have its sp_id from search_documents results. "
+        "Returns the full route metadata and every section in order."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "sp_id": {
+                "type": "integer",
+                "description": "SummitPost numeric route ID (from search_documents results).",
+            },
+        },
+        "required": ["sp_id"],
+    },
+}
+
 ALL_TOOLS: list[dict] = [
     WEATHER_TOOL,
     AVALANCHE_TOOL,
@@ -316,6 +396,8 @@ ALL_TOOLS: list[dict] = [
     GET_OUTING_DETAIL_TOOL,
     MAKE_ROUTE_TOOL,
     SHOW_IMAGES_TOOL,
+    SEARCH_DOCUMENTS_TOOL,
+    RETRIEVE_DOCUMENT_TOOL,
 ]
 
 # ---------------------------------------------------------------------------
@@ -563,6 +645,67 @@ def _handle_make_route(tool_input: dict) -> dict:
     }
 
 
+def _handle_search_documents(tool_input: dict) -> dict:
+    from src.geo import bbox_around, geocode_location
+    from src.rag import is_available, resolve_area, search
+    if not is_available():
+        return {"available": False, "note": "SummitPost route database not indexed yet."}
+
+    query = tool_input["query"]
+    n_results = min(int(tool_input.get("n_results") or 5), 15)
+    section_heading = tool_input.get("section_heading")
+    area = tool_input.get("area")
+    near = tool_input.get("near")
+    radius_km = float(tool_input.get("radius_km") or 50)
+
+    lat_min = lat_max = lon_min = lon_max = None
+    geo_note: str | None = None
+
+    if area:
+        bbox = resolve_area(area)
+        if bbox:
+            lat_min, lat_max, lon_min, lon_max = bbox
+            geo_note = f"Filtered to area '{area}' (bbox: lat {lat_min}–{lat_max}, lon {lon_min}–{lon_max})."
+        else:
+            geo_note = f"Area '{area}' not found in ranges database — returning unfiltered results."
+    elif near:
+        geo = geocode_location(near)
+        if geo:
+            lat_min, lat_max, lon_min, lon_max = bbox_around(geo["lat"], geo["lon"], radius_km)
+            geo_note = (
+                f"Filtered to {radius_km:.0f} km around '{near}' "
+                f"(geocoded: {geo['display_name']})."
+            )
+        else:
+            geo_note = f"Could not geocode '{near}' — returning unfiltered results."
+
+    results = search(
+        query,
+        n_results=n_results,
+        section_heading=section_heading,
+        lat_min=lat_min,
+        lat_max=lat_max,
+        lon_min=lon_min,
+        lon_max=lon_max,
+    )
+
+    out: dict = {"available": True, "query": query, "results": results}
+    if geo_note:
+        out["geo_filter"] = geo_note
+    return out
+
+
+def _handle_retrieve_document(tool_input: dict) -> dict:
+    from src.rag import get_route_sections, is_available
+    if not is_available():
+        return {"available": False, "note": "SummitPost route database not indexed yet."}
+    sp_id = int(tool_input["sp_id"])
+    route = get_route_sections(sp_id)
+    if not route:
+        return {"available": True, "found": False, "sp_id": sp_id}
+    return {"available": True, "found": True, "route": route}
+
+
 def _handle_show_images(tool_input: dict) -> dict:
     """
     Queue images for the gallery panel via the _images side-channel.
@@ -649,6 +792,8 @@ _HANDLERS: dict[str, Any] = {
     "get_outing_detail": _handle_get_outing_detail,
     "make_route": _handle_make_route,
     "show_images": _handle_show_images,
+    "search_documents": _handle_search_documents,
+    "retrieve_document": _handle_retrieve_document,
 }
 
 

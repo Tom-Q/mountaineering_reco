@@ -53,6 +53,23 @@ Build a curated local vector store for static route beta.
 - Personal/non-commercial use only
 - For bot-blocked sites: attempt politely, fall back to manual lookup links on failure
 
+### Phase 5 — Hosting + web frontend
+
+Expose the tool as an API and embed it in the Astro website (thomas-colin.com, hosted on Netlify free tier).
+
+**Backend:** Rewrite or wrap the Streamlit app as a FastAPI service. The UI/logic separation already in place makes this tractable. Host on a persistent server so ChromaDB (vector index) survives restarts.
+
+**Frontend:** JavaScript chatbot UI on the Astro site, calling the FastAPI backend.
+
+**Access control:** shared secret key distributed to friends via email/WhatsApp. Backend checks the key on every request. Keeps Claude API costs bounded (~10 EUR/month hard limit).
+
+**Hosting plan:**
+- **Pre-RAG** (app as-is): Render free tier works — no persistent storage needed, cold starts are just annoying
+- **With RAG**: Render free tier breaks — ChromaDB index lives on disk, wiped on every restart (every 15 min of inactivity). Re-building takes 5–10 min, not viable
+- **Target: Hetzner CAX11** (~€5/month, 2 vCPU ARM, 4GB RAM, persistent disk) — best value once RAG is added. Same price as Render paid tier but full VPS control
+- **Alternative**: store the ChromaDB index in the private repo (~50MB binary) and fetch it on startup — hacky but functional for our small corpus if avoiding a VPS is important
+- **Oracle Cloud free tier** (2 permanent ARM VMs) — genuinely free with persistent disk, more setup
+
 ---
 
 ## Backlog
