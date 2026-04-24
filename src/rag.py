@@ -1,4 +1,4 @@
-"""RAG retrieval layer for local route databases (SummitPost, passion-alpes, …).
+"""RAG retrieval layer for local route databases (SummitPost, passion-alpes, SAC).
 
 Public API:
     is_available() -> bool
@@ -7,6 +7,7 @@ Public API:
            lat_min, lat_max, lon_min, lon_max) -> list[dict]
     get_route_sections(sp_id) -> dict          # SummitPost deep-dive
     get_passion_alpes_topo(topo_id) -> dict    # passion-alpes deep-dive
+    get_sac_topo(route_id) -> dict             # SAC deep-dive
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from typing import Any
 _CHROMA_PATH = Path(__file__).parent.parent / "data" / "chroma"
 _DB_PATH = Path(__file__).parent.parent / "data" / "summitpost.db"
 _PA_DB_PATH = Path(__file__).parent.parent / "data" / "passion_alpes.db"
+_SAC_DB_PATH = Path(__file__).parent.parent / "data" / "sac.db"
 _RANGES_YAML = Path(__file__).parent.parent / "domain_knowledge" / "ranges.yaml"
 _COLLECTION_NAME = "route_sections"
 _MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
@@ -193,6 +195,42 @@ def get_passion_alpes_topo(topo_id: int) -> dict:
             {"url": img["image_url"], "caption": img["caption"], "is_diagram": bool(img["is_diagram"])}
             for img in images
         ],
+    }
+
+
+def get_sac_topo(route_id: int) -> dict:
+    """Return the full route record from sac.db (deep-dive expansion)."""
+    if not _SAC_DB_PATH.exists():
+        return {}
+    conn = sqlite3.connect(_SAC_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    topo = conn.execute(
+        """SELECT id, summit_id, url, title, category, region, grade,
+                  timing, altitude, latitude, longitude, full_text, scraped_at
+           FROM topos WHERE id = ?""",
+        (route_id,),
+    ).fetchone()
+    if not topo:
+        conn.close()
+        return {}
+    images = conn.execute(
+        "SELECT image_url, caption FROM topo_images WHERE topo_id = ?",
+        (route_id,),
+    ).fetchall()
+    conn.close()
+    return {
+        "route_id": route_id,
+        "url": topo["url"],
+        "title": topo["title"],
+        "region": topo["region"],
+        "grade": topo["grade"],
+        "timing": topo["timing"],
+        "altitude": topo["altitude"],
+        "latitude": topo["latitude"],
+        "longitude": topo["longitude"],
+        "full_text": topo["full_text"],
+        "scraped_at": topo["scraped_at"],
+        "images": [{"url": img["image_url"], "caption": img["caption"]} for img in images],
     }
 
 

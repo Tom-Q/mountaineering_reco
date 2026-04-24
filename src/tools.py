@@ -372,7 +372,7 @@ RETRIEVE_DOCUMENT_TOOL: dict = {
     "description": (
         "Retrieve the full record for a specific route from the local database. "
         "Use this for a deep-dive on one route once you have its ID from search_documents results. "
-        "Pass sp_id for SummitPost routes, or topo_id for passion-alpes routes. "
+        "Pass sp_id for SummitPost routes, topo_id for passion-alpes routes, or sac_id for SAC routes. "
         "Returns the full route metadata, all sections, and image URLs."
     ),
     "input_schema": {
@@ -385,6 +385,10 @@ RETRIEVE_DOCUMENT_TOOL: dict = {
             "topo_id": {
                 "type": "integer",
                 "description": "passion-alpes topo ID (from search_documents metadata).",
+            },
+            "sac_id": {
+                "type": "integer",
+                "description": "SAC route ID (from search_documents metadata, source='sac').",
             },
         },
     },
@@ -700,7 +704,7 @@ def _handle_search_documents(tool_input: dict) -> dict:
 
 
 def _handle_retrieve_document(tool_input: dict) -> dict:
-    from src.rag import get_passion_alpes_topo, get_route_sections, is_available
+    from src.rag import get_passion_alpes_topo, get_route_sections, get_sac_topo, is_available
     if not is_available():
         return {"available": False, "note": "Route database not indexed yet."}
 
@@ -718,7 +722,14 @@ def _handle_retrieve_document(tool_input: dict) -> dict:
             return {"available": True, "found": False, "sp_id": sp_id}
         return {"available": True, "found": True, "source": "summitpost", "route": route}
 
-    return {"available": True, "found": False, "note": "Provide either sp_id or topo_id."}
+    if "sac_id" in tool_input and tool_input["sac_id"] is not None:
+        sac_id = int(tool_input["sac_id"])
+        topo = get_sac_topo(sac_id)
+        if not topo:
+            return {"available": True, "found": False, "sac_id": sac_id}
+        return {"available": True, "found": True, "source": "sac", "topo": topo}
+
+    return {"available": True, "found": False, "note": "Provide sp_id, topo_id, or sac_id."}
 
 
 def _handle_show_images(tool_input: dict) -> dict:
