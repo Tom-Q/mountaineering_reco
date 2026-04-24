@@ -1,58 +1,69 @@
-# Mountaineering Route Recommender
+# Mountaineering Preparation Assistant
 
-A personal tool for suggesting alpine objectives based on current conditions, weather forecasts, and an honest assessment of what's actually within your limits.
-Also an excuse for playing around with Claude Code and integrating an LLM within a simple app.
+Technical mountaineering involves a lot of online preparation work: finding good routes, checking hut availability, reading conditions reports, cross-referencing topos from multiple sources, checking out multiple trip reports, assessing whether a route is in shape for the current season. A bare LLM is not capable of this:
 
-## What this is
+- No access to the relevant information — trip reports and route topos are behind paywalls or bot-protected, sometimes in JavaScript-rendered pages
+- Pollution from beginner forums (Reddit, etc.) that dominate search results for popular objectives
+- High-level mountaineering knowledge is tacit and rarely written down at all — the kind of judgment that separates a guide from a tourist doesn't end up in training data
 
-You enter your route history and constraints. The app queries [Camptocamp](https://www.camptocamp.org) for candidate routes and recent conditions reports, fetches weather forecasts from [Open-Meteo](https://open-meteo.com), and uses an LLM to synthesise everything into a plain-language recommendation. A chat tab lets you drill into any route in depth.
+This app is a conversational assistant: an LLM (Claude via the Anthropic API) empowered by a set of tools that give it structure and real access to the information that actually matters.
 
-Route descriptions and beta also draw on a local database of ~2,300 SummitPost mountaineering routes, scraped and stored in SQLite, with RAG retrieval planned.
+## Tools
+
+- **Camptocamp integration** — route search by name or geographic area, full route details (description, approach, required gear, grades, images), trip report lists and full trip report text, via API
+- **Avalanche forecasts** — Météo-France BRA for French massifs; EAWS CAAMLv6 feeds for Switzerland, Italy, and Austria, via API 
+- **Weather** — Open-Meteo: 7-day forecast, recent snowfall history, seasonal snow accumulation, re-freeze altitude; calibrated to snow-season windows per mountain range, via API
+- **RAG on ethically scraped route databases** — SummitPost (~2,300 mountaineering routes worldwide), SAC (Swiss Alpine Club, 800 routes or route stubs for those paywalled); semantic search with geographic filtering via ChromaDB and a multilingual sentence-transformer model
+- **Domain knowledge** — mountain range bounding boxes, French massif polygons, grade system encodings (French rock, UIAA, WI, M-grades, alpine commitment), snow season windows per range
 
 ## Why an LLM isn't enough on its own
 
-LLMs are bad at mountaineering route assessment. The failure modes are predictable:
+Even with tool access, the LLM needs to be constrained in what judgments it makes. The failure modes of LLMs on mountaineering questions are predictable:
 
-- They conflate grade systems (French rock, UIAA, Yosemite, WI, M-grades, PD/AD/D/TD — these are not interchangeable)
-- They treat nominal grades as ground truth. An AD in poor late-season shape can be more committing than a TD in perfect conditions. A 150m route graded "TD+" due to one 6b move is incomparable to 1000m of difficulties with difficult route-finding graded AD because the max grade is 4. Comments from other users will be interpreted at face value when that user's history determines whether their "straightforward" is the same as your "straightforward".
-- They can't read between the lines of conditions reports — "a few crevasses to avoid" means something very different in July vs October
-- They don't know what they don't know, and mountaineering is an area where confident-sounding wrong advice has real consequences
-
-The architecture here is designed around these limitations:
-
-- **Grade filtering is deterministic.** The LLM never decides whether a route is within your limits — that logic is explicit, auditable, and encodes real domain knowledge about how grade systems relate to each other
-- **The LLM's job is narrow.** It reads conditions text and weather data and explains, in plain language, whether a route is *in shape right now*. That's a task it can do reasonably well
-- **Prompts are versioned separately.** Prompt engineering is a first-class concern; prompts live in `/prompts` and can be iterated independently of the application logic
+- They treat nominal grades as ground truth. An AD in poor late-season shape can be more committing than a TD in perfect conditions. A 150m route graded TD+ due to one 6b move is incomparable to 1000m of sustained difficulties at AD where the hardest move is 4.
+- They can't read between the lines of conditions reports
+- They don't know what they don't know, and mountaineering is a domain where confident-sounding wrong advice has real consequences
+- They make very surprising mistakes reflecting lack of common-sense, with potentially dramatic consequences in an alpine context
 
 ## Stack
 
-- **Backend / app:** Python, [Streamlit](https://streamlit.io)
-- **Route data:** Camptocamp API (unofficial, reverse-engineered from their frontend); SummitPost (scraped, stored locally in SQLite)
-- **Weather:** Open-Meteo (free, no API key required)
-- **Avalanche bulletins:** Météo-France BRA (French massifs), SLF (Switzerland), EUREGIO / avalanche.report (South Tyrol, Trentino, Tyrol), and AINEVA-affiliated feeds for other Italian regions (seasonal)
-- **LLM:** Anthropic Claude API
+- **App:** Python, [Streamlit](https://streamlit.io)
+- **LLM:** Anthropic Claude API (Sonnet for chat)
+- **Route data:** Camptocamp API; SummitPost, SAC, passion-alpes.com (scraped, stored in SQLite)
+- **RAG:** [ChromaDB](https://www.trychroma.com) + [sentence-transformers](https://www.sbert.net) (`paraphrase-multilingual-mpnet-base-v2`)
+- **Weather:** [Open-Meteo](https://open-meteo.com) (free, no API key required)
+- **Avalanche:** Météo-France BRA (requires API key, free on their website), EAWS CAAMLv6 (public API)
 
 ## Project structure
 
 ```
-├── app.py                   # Streamlit entry point
+├── app.py
 ├── src/
-│   ├── camptocamp.py        # Camptocamp API client
-│   ├── weather.py           # Open-Meteo integration
-│   ├── avalanche.py         # Avalanche bulletin integration (MF + EAWS)
-│   ├── analysis.py          # Per-route LLM analysis and summaries
-│   ├── chat.py              # Streaming agentic chat loop
-│   ├── grades.py            # Grade parsing, normalization, constraint logic
-│   └── search.py            # Route search and enrichment
+│   ├── camptocamp.py       # Camptocamp API client
+│   ├── weather.py          # Open-Meteo integration
+│   ├── avalanche.py        # Avalanche bulletin (MF BRA + EAWS)
+│   ├── rag.py              # RAG search and retrieval
+│   ├── tools.py            # Tool definitions passed to Claude
+│   ├── chat.py             # Streaming agentic chat loop
+│   ├── grades.py           # Grade parsing and constraint logic
+│   ├── geo.py              # Range classification, geocoding
+│   └── search.py           # Route search and enrichment
 ├── prompts/
-│   ├── route_analysis.md    # Per-route analysis prompt
-│   └── route_summary.md     # One-line route summary prompt
-├── liste-massifs.geojson    # French massif polygons for avalanche geo-lookup
+│   └── alpinist_chat.md    # Chat system prompt
+├── domain_knowledge/
+│   ├── grade_systems.yaml
+│   ├── ranges.yaml
+│   ├── snow_seasons.yaml
+│   └── liste-massifs.geojson
+├── scrapers/               # Data collection scripts (SummitPost, SAC, passion-alpes)
 └── data/
-    └── grade_systems.yaml   # Grade mappings and domain knowledge
+    ├── summitpost.db
+    ├── sac.db
+    ├── passion_alpes.db
+    └── chroma/             # Vector store (gitignored — build artifact)
 ```
 
-The SummitPost scraper and the `data/summitpost.db` database are kept in a separate private repository.
+The SQLite databases and `chroma/` vector store are gitignored. Run the scrapers in `scrapers/` to populate them.
 
 ## Setup
 
@@ -65,23 +76,15 @@ cp .env.example .env
 streamlit run app.py
 ```
 
-The app expects `data/summitpost.db` to exist for SummitPost-backed features. Without it, those features degrade gracefully.
+The app degrades gracefully without the local databases — Camptocamp, weather, and avalanche features work without them.
 
-## Usage
+## Ongoing and planned work
 
-1. Enter your route history using the form — route name, grade, discipline, season, conditions encountered
-2. Set your hard constraints (max grades per discipline, preferred regions, available dates)
-3. The app fetches candidate routes, current conditions, and weather
-4. The LLM synthesises conditions reports and weather into a recommendation with explicit reasoning
-5. Use the Chat tab to ask follow-up questions about any route in depth
-
-## Design decisions and known limitations
-
-**Grade constraints are opinionated.** The app uses a custom grade mapping that weights commitment and objective hazard alongside technical difficulty. A route with significant glacier approach or serious descent is not treated the same as a route of equivalent rock grade with a walk-off.
-
-**Conditions reports are noisy.** Camptocamp conditions reports vary enormously in quality and recency. The app surfaces report age and gives the LLM explicit instructions to flag uncertainty when reports are stale or contradictory.
-
-**This is a personal tool.** It is not designed for general audiences and makes no safety guarantees. The recommendations are a starting point for research, not a substitute for judgment.
+- Various UI and ergonomy improvements
+- Better prompt engineering
+- Mountain hut info tool — hut name, capacity, booking contact, opening season, warden availability
+- Expanding route database coverage (Andes Handbook, hobbyist route documentation sites)
+- Key-protected deployment on [thomascolin.com](https://www.thomascolin.com) via FastAPI
 
 ## Author
 
