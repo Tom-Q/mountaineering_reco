@@ -20,6 +20,7 @@ import yaml
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
+import requests
 import requests_cache
 from pathlib import Path
 
@@ -89,7 +90,7 @@ def route_coords(route: dict) -> tuple[float, float] | None:
             math.atan(math.exp(y * math.pi / 20037508.34)) * 2 - math.pi / 2
         )
         return lat, lon
-    except Exception:
+    except (TypeError, ValueError, KeyError, IndexError):
         return None
 
 
@@ -535,6 +536,14 @@ def fetch_weather_for_coords(
         today_str_split = today.isoformat()
         hist_days     = [d for d in all_days if d.date <  today_str_split]
         forecast_days = [d for d in all_days if d.date >= today_str_split]
+    except requests.exceptions.HTTPError as e:
+        code = e.response.status_code if e.response is not None else "?"
+        if code == 429:
+            errors.append("Weather unavailable: Open-Meteo rate limit hit — try again in a moment.")
+        elif code in (502, 503, 504):
+            errors.append(f"Weather unavailable: Open-Meteo service error (HTTP {code}).")
+        else:
+            errors.append(f"Weather unavailable: HTTP {code}.")
     except Exception as e:
         errors.append(f"Weather unavailable: {e}")
 
@@ -543,6 +552,14 @@ def fetch_weather_for_coords(
         from src.geo import classify_range
         range_name = classify_range(lat, lon)
         historical_text = _fetch_snowfall_summary(lat, lon, today, range_name, elevation_m=elevation_m)
+    except requests.exceptions.HTTPError as e:
+        code = e.response.status_code if e.response is not None else "?"
+        if code == 429:
+            errors.append("Snowfall data unavailable: Open-Meteo rate limit hit — try again in a moment.")
+        elif code in (502, 503, 504):
+            errors.append(f"Snowfall data unavailable: Open-Meteo service error (HTTP {code}).")
+        else:
+            errors.append(f"Snowfall data unavailable: HTTP {code}.")
     except Exception as e:
         errors.append(f"Snowfall data unavailable: {e}")
 

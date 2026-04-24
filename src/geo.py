@@ -23,6 +23,7 @@ import math
 import time
 from pathlib import Path
 
+import requests
 import requests_cache
 
 from src.spatial import point_in_geometry
@@ -209,8 +210,8 @@ def _nominatim_query(query: str, strict: bool = False) -> dict | None:
                     "importance":   float(importance) if importance is not None else None,
                     "query_used":   query,
                 }
-    except Exception:
-        pass
+    except (requests.exceptions.RequestException, ValueError, KeyError) as exc:
+        print(f"[geo] Nominatim query failed for {query!r}: {exc}")
     return None
 
 

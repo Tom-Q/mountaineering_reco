@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import requests
 import requests_cache
 from dotenv import load_dotenv
 
@@ -176,7 +177,8 @@ def _load_micro_regions(provider_code: str) -> list:
         r = _region_session.get(url, timeout=15)
         r.raise_for_status()
         features = r.json().get("features", [])
-    except Exception:
+    except (requests.exceptions.RequestException, ValueError, KeyError) as exc:
+        print(f"[avalanche] Failed to load micro-regions for {provider_code!r}: {exc}")
         features = []
 
     _micro_region_cache[provider_code] = features
@@ -221,7 +223,8 @@ def _fetch_caaml_bulletins(feed_url: str) -> list[dict]:
         if isinstance(data, list):
             return data
         return data.get("bulletins", [])
-    except Exception:
+    except (requests.exceptions.RequestException, ValueError, KeyError) as exc:
+        print(f"[avalanche] Failed to fetch CAAML bulletins from {feed_url!r}: {exc}")
         return []
 
 
