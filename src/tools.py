@@ -309,10 +309,10 @@ SHOW_IMAGES_TOOL: dict = {
 SEARCH_DOCUMENTS_TOOL: dict = {
     "name": "search_documents",
     "description": (
-        "Search the local SummitPost database for route descriptions, approach notes, "
-        "gear lists, and other static beta. "
+        "Search the local route database (SummitPost + passion-alpes.com topos) for route "
+        "descriptions, approach notes, gear lists, and other static beta. "
         "Use for factual route information (what the route is like, gear needed, approach). "
-        "Works in any language — a French query will match English, German, and Italian content. "
+        "Works in any language — a French query will match English, French, German, and Italian content. "
         "Not for conditions or weather — use get_outing_detail and get_weather_forecast for those. "
         "Returns the most semantically relevant section chunks.\n\n"
         "Geographic filtering — use at most one of:\n"
@@ -370,19 +370,23 @@ SEARCH_DOCUMENTS_TOOL: dict = {
 RETRIEVE_DOCUMENT_TOOL: dict = {
     "name": "retrieve_document",
     "description": (
-        "Retrieve all sections for a specific SummitPost route by its numeric ID. "
-        "Use this for a deep-dive on one route once you have its sp_id from search_documents results. "
-        "Returns the full route metadata and every section in order."
+        "Retrieve the full record for a specific route from the local database. "
+        "Use this for a deep-dive on one route once you have its ID from search_documents results. "
+        "Pass sp_id for SummitPost routes, or topo_id for passion-alpes routes. "
+        "Returns the full route metadata, all sections, and image URLs."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "sp_id": {
                 "type": "integer",
-                "description": "SummitPost numeric route ID (from search_documents results).",
+                "description": "SummitPost numeric route ID (from search_documents metadata).",
+            },
+            "topo_id": {
+                "type": "integer",
+                "description": "passion-alpes topo ID (from search_documents metadata).",
             },
         },
-        "required": ["sp_id"],
     },
 }
 
@@ -696,14 +700,25 @@ def _handle_search_documents(tool_input: dict) -> dict:
 
 
 def _handle_retrieve_document(tool_input: dict) -> dict:
-    from src.rag import get_route_sections, is_available
+    from src.rag import get_passion_alpes_topo, get_route_sections, is_available
     if not is_available():
-        return {"available": False, "note": "SummitPost route database not indexed yet."}
-    sp_id = int(tool_input["sp_id"])
-    route = get_route_sections(sp_id)
-    if not route:
-        return {"available": True, "found": False, "sp_id": sp_id}
-    return {"available": True, "found": True, "route": route}
+        return {"available": False, "note": "Route database not indexed yet."}
+
+    if "topo_id" in tool_input and tool_input["topo_id"] is not None:
+        topo_id = int(tool_input["topo_id"])
+        topo = get_passion_alpes_topo(topo_id)
+        if not topo:
+            return {"available": True, "found": False, "topo_id": topo_id}
+        return {"available": True, "found": True, "source": "passion_alpes", "topo": topo}
+
+    if "sp_id" in tool_input and tool_input["sp_id"] is not None:
+        sp_id = int(tool_input["sp_id"])
+        route = get_route_sections(sp_id)
+        if not route:
+            return {"available": True, "found": False, "sp_id": sp_id}
+        return {"available": True, "found": True, "source": "summitpost", "route": route}
+
+    return {"available": True, "found": False, "note": "Provide either sp_id or topo_id."}
 
 
 def _handle_show_images(tool_input: dict) -> dict:

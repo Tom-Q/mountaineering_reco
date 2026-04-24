@@ -1,11 +1,12 @@
-"""SummitPost RAG retrieval layer.
+"""RAG retrieval layer for local route databases (SummitPost, passion-alpes, …).
 
 Public API:
     is_available() -> bool
     resolve_area(name) -> (lat_min, lat_max, lon_min, lon_max) | None
     search(query, n_results, section_heading, source,
            lat_min, lat_max, lon_min, lon_max) -> list[dict]
-    get_route_sections(sp_id) -> dict
+    get_route_sections(sp_id) -> dict          # SummitPost deep-dive
+    get_passion_alpes_topo(topo_id) -> dict    # passion-alpes deep-dive
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from typing import Any
 
 _CHROMA_PATH = Path(__file__).parent.parent / "data" / "chroma"
 _DB_PATH = Path(__file__).parent.parent / "data" / "summitpost.db"
+_PA_DB_PATH = Path(__file__).parent.parent / "data" / "passion_alpes.db"
 _RANGES_YAML = Path(__file__).parent.parent / "domain_knowledge" / "ranges.yaml"
 _COLLECTION_NAME = "route_sections"
 _MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
@@ -151,6 +153,47 @@ def search(
     ):
         output.append({"text": doc, "distance": round(float(dist), 4), **meta})
     return output
+
+
+def get_passion_alpes_topo(topo_id: int) -> dict:
+    """Return the full topo record from passion_alpes.db (deep-dive expansion).
+
+    Returns a dict with topo metadata, full text, and images.
+    Returns an empty dict if the topo is not found or the DB doesn't exist.
+    """
+    if not _PA_DB_PATH.exists():
+        return {}
+    conn = sqlite3.connect(_PA_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    topo = conn.execute(
+        "SELECT id, url, title, category, region, grade, departure, timing, full_text, scraped_at "
+        "FROM topos WHERE id = ?",
+        (topo_id,),
+    ).fetchone()
+    if not topo:
+        conn.close()
+        return {}
+    images = conn.execute(
+        "SELECT image_url, caption, is_diagram FROM topo_images WHERE topo_id = ?",
+        (topo_id,),
+    ).fetchall()
+    conn.close()
+    return {
+        "topo_id": topo_id,
+        "url": topo["url"],
+        "title": topo["title"],
+        "category": topo["category"],
+        "region": topo["region"],
+        "grade": topo["grade"],
+        "departure": topo["departure"],
+        "timing": topo["timing"],
+        "full_text": topo["full_text"],
+        "scraped_at": topo["scraped_at"],
+        "images": [
+            {"url": img["image_url"], "caption": img["caption"], "is_diagram": bool(img["is_diagram"])}
+            for img in images
+        ],
+    }
 
 
 def get_route_sections(sp_id: int) -> dict:

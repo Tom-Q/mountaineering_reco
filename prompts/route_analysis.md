@@ -11,7 +11,7 @@ Use web search to find topo descriptions and recent trip reports for the route. 
 **Regional sites — search these based on where the route is:**
 
 | Region | Site | What it has |
-|---|---|---|
+|---|---|---|- All links to original sources.
 | French Alps, Francophone Switzerland, Aosta Valley | `montagnes-magazine.com` | High-quality topos for classic French/Alpine routes. Search: *"topo [summit or route name]"* |
 | French Alps (esp. Mont Blanc massif, Aiguilles Rouges) | `passion-alpes.com` | ~150 topos of classic routes, mostly in the Mont Blanc area but also elsewhere in the Alps. French-language. Fetchable. Search: *"topo [route or summit name]"* |
 | French-language rock + alpine (Mediterranean + worldwide) | `verticalpirate-escalade.com` | Guide's personal site with route descriptions across Provence, Verdon, Calanques, and further afield. French-language. Fetchable. Search: *"topo [route name]"* |
