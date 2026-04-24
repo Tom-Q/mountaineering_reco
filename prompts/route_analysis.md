@@ -6,8 +6,7 @@ Use web search to find topo descriptions and recent trip reports for the route. 
 
 **Sites to search for every route:**
 - **Camptocamp** (`camptocamp.org`) — already in the input. Link the route page.
-- **SummitPost** (`summitpost.org`) — search for the route or summit name. *Bot-blocked: find the URL via search, include it, but do not fetch the page.*
-- **Mountain Project** (`mountainproject.com`) — search for the route name. *Bot-blocked: same treatment.* Coverage is thin for European alpine routes, but worth a check.
+
 
 **Regional sites — search these based on where the route is:**
 
