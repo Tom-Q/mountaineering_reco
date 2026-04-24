@@ -74,6 +74,44 @@ Expose the tool as an API and embed it in the Astro website (thomas-colin.com, h
 
 ## Backlog
 
+### Reviewer agent for route analysis
+`src/route_analysis.py` (now deleted) had a two-pass LLM pattern: a writer pass produces a
+structured analysis, then a reviewer pass checks for invented conditions or hallucinated data
+and either passes or returns a revised output as JSON. The reviewer used a separate system
+prompt (`prompts/route_reviewer.md`) and the same Haiku model. If a structured analysis mode
+is revived, restore this pattern — it's a clean way to catch confident hallucinations without
+adding complexity to the main prompt.
+
+```python
+# Sketch of the pattern:
+response = client.messages.create(model=..., system=WRITER_PROMPT, messages=[user_msg])
+analysis = response.content[0].text
+
+reviewer_msg = "## Source data\n" + user_msg + "\n\n---\n\n## Analysis to review\n" + analysis
+verdict = client.messages.create(model=..., system=REVIEWER_PROMPT, messages=[reviewer_msg])
+parsed = json.loads(verdict.content[0].text)
+if parsed["verdict"] == "revise" and parsed["revised_output"]:
+    analysis = parsed["revised_output"]
+```
+
+### Seasonality from outing date distribution
+`src/route_analysis.py` (now deleted) built a date-distribution block from all Camptocamp
+outing stubs (not just the selected full reports), formatted as a dated list with age labels
+and condition ratings. This gives the LLM a long-range view of when the route is typically
+attempted and in what condition — useful for seasonality assessment independent of recent
+conditions. If a structured analysis mode is revived, include this block:
+
+```python
+date_lines = [f"## All trip report dates ({len(stubs)} total, today is {today})"]
+for s in sorted(stubs, key=lambda x: x.get("date_start") or "", reverse=True):
+    d = s.get("date_start") or "?"
+    r = s.get("condition_rating") or "—"
+    age = _age_label(d)
+    date_lines.append(f"- {d}  ({age})  rating: {r}")
+```
+
+
+
 ### Multi-agent parallelism
 Dispatch separate fetch agents simultaneously (one per data source), each returning a strict JSON contract, then merge results. Reduces latency and keeps concerns separated.
 

@@ -131,44 +131,7 @@ class AvalancheBulletin:
     fetch_error: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Point-in-polygon (ray-casting, no external dependencies)
-# ---------------------------------------------------------------------------
-
-def _ray_cast(lat: float, lon: float, ring: list) -> bool:
-    inside = False
-    n = len(ring)
-    j = n - 1
-    for i in range(n):
-        xi, yi = ring[i][0], ring[i][1]   # GeoJSON: [lon, lat]
-        xj, yj = ring[j][0], ring[j][1]
-        if ((yi > lat) != (yj > lat)) and (
-            lon < (xj - xi) * (lat - yi) / (yj - yi) + xi
-        ):
-            inside = not inside
-        j = i
-    return inside
-
-
-def _point_in_polygon(lat: float, lon: float, rings: list) -> bool:
-    if not rings:
-        return False
-    if not _ray_cast(lat, lon, rings[0]):
-        return False
-    for hole in rings[1:]:
-        if _ray_cast(lat, lon, hole):
-            return False
-    return True
-
-
-def _point_in_multipolygon(lat: float, lon: float, geometry: dict) -> bool:
-    gtype = geometry.get("type", "")
-    coords = geometry.get("coordinates", [])
-    if gtype == "Polygon":
-        return _point_in_polygon(lat, lon, coords)
-    if gtype == "MultiPolygon":
-        return any(_point_in_polygon(lat, lon, poly) for poly in coords)
-    return False
+from src.spatial import point_in_geometry
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +151,7 @@ def _find_massif(lat: float, lon: float) -> dict | None:
             print(f"[avalanche] Failed to load massif GeoJSON: {exc}")
             return None
     for feature in _massif_features:
-        if _point_in_multipolygon(lat, lon, feature["geometry"]):
+        if point_in_geometry(lat, lon, feature["geometry"]):
             return feature["properties"]
     return None
 
@@ -234,7 +197,7 @@ def _find_eaws_region(lat: float, lon: float, provider_codes: list[str]) -> tupl
     for code in provider_codes:
         for feature in _load_micro_regions(code):
             geom = feature.get("geometry")
-            if geom and _point_in_multipolygon(lat, lon, geom):
+            if geom and point_in_geometry(lat, lon, geom):
                 region_id = _feature_region_id(feature)
                 if region_id:
                     return region_id, code

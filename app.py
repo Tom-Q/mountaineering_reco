@@ -1,11 +1,10 @@
-import json
-import re
 import streamlit as st
 from dotenv import load_dotenv
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date
 
 from src.chat import chat_alpinist
+from src.ui_helpers import log, tool_status_label, render_chat_images, render_gallery
 from src.grades import (
     ROCK, ICE, MIXED, ALPINE,
     ENGAGEMENT, ENGAGEMENT_LABELS,
@@ -13,115 +12,6 @@ from src.grades import (
     EXPOSITION, EXPOSITION_LABELS,
     EQUIPMENT, EQUIPMENT_LABELS,
 )
-
-_LOG_DIR = Path(".logs")
-_LOG_DIR.mkdir(exist_ok=True)
-
-
-def _log(entry: dict) -> None:
-    entry["ts"] = datetime.now().isoformat(timespec="milliseconds")
-    log_path = _LOG_DIR / f"chat_{date.today()}.jsonl"
-    with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-
-def _tool_status_label(name: str, tool_input: dict) -> str:
-    if name == "get_weather_forecast":
-        lat = tool_input.get("latitude", "?")
-        lon = tool_input.get("longitude", "?")
-        elev = tool_input.get("elevation_m")
-        elev_str = f" ({elev}m)" if elev else ""
-        try:
-            return f"Fetching weather for {lat:.2f}°N, {lon:.2f}°E{elev_str}"
-        except (TypeError, ValueError):
-            return "Fetching weather..."
-    if name == "get_avalanche_bulletin":
-        lat = tool_input.get("latitude", "?")
-        lon = tool_input.get("longitude", "?")
-        try:
-            return f"Fetching avalanche bulletin for {lat:.2f}°N, {lon:.2f}°E"
-        except (TypeError, ValueError):
-            return "Fetching avalanche bulletin..."
-    if name == "search_routes_by_name":
-        query = tool_input.get("query", "")
-        return f"Searching Camptocamp for \"{query}\""
-    if name == "search_routes_by_area":
-        return "Searching Camptocamp routes in area"
-    if name == "fetch_route":
-        return f"Fetching route #{tool_input.get('route_id')}"
-    if name == "get_outing_list":
-        return f"Fetching trip report list for route #{tool_input.get('route_id')}"
-    if name == "get_outing_detail":
-        return f"Fetching trip report #{tool_input.get('outing_id')}"
-    if name == "show_images":
-        n = len(tool_input.get("images", []))
-        return f"Queuing {n} image{'s' if n != 1 else ''} for gallery"
-    return f"Calling {name}..."
-
-
-def _render_chat_images(text: str, attached: list | None = None) -> None:
-    images = list(attached or [])
-    images.extend(re.findall(r'!\[.*?\]\((https?://[^\)]+)\)', text))
-    for img in images:
-        try:
-            st.image(img)
-        except Exception:
-            pass
-
-
-def _render_gallery() -> None:
-    gallery: list[dict] = st.session_state.get("image_gallery", [])
-    blobs: dict = st.session_state.get("image_blobs", {})
-
-    st.markdown("#### Photos & images")
-
-    if not gallery:
-        st.caption("Images surfaced by the assistant will appear here.")
-        return
-
-    idx = st.session_state.get("gallery_index", 0)
-    idx = max(0, min(idx, len(gallery) - 1))
-    st.session_state["gallery_index"] = idx
-
-    item = gallery[idx]
-
-    blob_key = item.get("blob_key")
-    if blob_key and blob_key in blobs:
-        image_data = blobs[blob_key]
-    else:
-        image_data = item.get("url")
-
-    url = item.get("url", "")
-    if url.lower().endswith(".svg"):
-        st.markdown(f"[Open diagram (SVG)]({url})")
-    elif image_data:
-        try:
-            st.image(image_data, width="stretch")
-        except Exception as e:
-            st.caption(f"Could not load image: {e}")
-
-    caption = item.get("caption", "")
-    source_url = item.get("source_url")
-    if caption:
-        st.caption(caption)
-    if source_url:
-        st.markdown(f"[Source]({source_url})", unsafe_allow_html=False)
-
-    if len(gallery) > 1:
-        prev_col, counter_col, next_col = st.columns([1, 2, 1])
-        with prev_col:
-            if st.button("◀", key="gallery_prev", disabled=(idx == 0)):
-                st.session_state["gallery_index"] = idx - 1
-                st.rerun()
-        with counter_col:
-            st.markdown(
-                f"<div style='text-align:center;padding-top:6px'>{idx + 1} / {len(gallery)}</div>",
-                unsafe_allow_html=True,
-            )
-        with next_col:
-            if st.button("▶", key="gallery_next", disabled=(idx == len(gallery) - 1)):
-                st.session_state["gallery_index"] = idx + 1
-                st.rerun()
 
 
 load_dotenv()
@@ -241,7 +131,7 @@ with tab_chat:
     chat_col, gallery_col = st.columns([7, 3])
 
     with gallery_col:
-        _render_gallery()
+        render_gallery()
 
     with chat_col:
         messages = st.container()
@@ -251,10 +141,10 @@ with tab_chat:
             for msg in st.session_state["chat_history"]:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
-                    _render_chat_images(msg["content"], msg.get("images"))
+                    render_chat_images(msg["content"], msg.get("images"))
 
             if user_input:
-                _log({"type": "user", "content": user_input})
+                log({"type": "user", "content": user_input})
                 st.session_state["chat_history"].append({"role": "user", "content": user_input})
                 st.session_state["api_messages"].append({"role": "user", "content": user_input})
                 with st.chat_message("user"):
@@ -291,12 +181,12 @@ with tab_chat:
                                     text_placeholder.markdown(accumulated + "▌")
 
                             elif event["type"] == "tool_start":
-                                _log({"type": "tool_call", "name": event["name"], "input": event["input"]})
-                                current_status_label = _tool_status_label(event["name"], event["input"])
+                                log({"type": "tool_call", "name": event["name"], "input": event["input"]})
+                                current_status_label = tool_status_label(event["name"], event["input"])
                                 current_status = st.status(current_status_label + "...", expanded=False)
 
                             elif event["type"] == "tool_end":
-                                _log({
+                                log({
                                     "type": "tool_result",
                                     "name": event["name"],
                                     "error": event["error"],
@@ -333,18 +223,18 @@ with tab_chat:
                                 if event.get("images") or event.get("image_blobs"):
                                     st.session_state["gallery_index"] = 0
                                 if new_images:
-                                    _log({"type": "images_queued", "images": new_images})
+                                    log({"type": "images_queued", "images": new_images})
 
                             elif event["type"] == "done":
                                 text_placeholder.markdown(accumulated)
                                 st.session_state["api_messages"].extend(event["new_api_messages"])
                                 reply = accumulated
-                                _log({"type": "assistant", "content": reply})
+                                log({"type": "assistant", "content": reply})
 
-                        _render_chat_images(reply)
+                        render_chat_images(reply)
                     except Exception as e:
                         reply = f"Sorry, I couldn't reach the assistant ({e}). Please try again."
-                        _log({"type": "error", "error": str(e)})
+                        log({"type": "error", "error": str(e)})
                         st.markdown(reply)
 
                 st.session_state["chat_history"].append(

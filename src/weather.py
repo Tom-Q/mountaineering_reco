@@ -311,7 +311,7 @@ def _build_all_days(lat: float, lon: float, past_days: int = 7,
     return result
 
 
-def _fmt_iso(iso: str, hour: int | None) -> str:
+def _fmt_isotherm(iso: str, hour: int | None) -> str:
     """Format isotherm with its UTC hour: '2450m @03h', or '—' if n/a."""
     if iso == "n/a":
         return "—"
@@ -328,8 +328,8 @@ def _format_forecast_text(days: list[_DayForecast]) -> str:
         storm = " ⚠STORM" if d.storm else ""
         lines.append(
             f"{d.date} | {d.snowfall_cm:>8.1f} | {d.gusts_max:>11.0f} | "
-            f"{d.wind_850hpa:>17.0f} | {_fmt_iso(d.refreeze_isotherm, d.refreeze_hour):>21} | "
-            f"{_fmt_iso(d.melt_isotherm, d.melt_hour):>16} | {d.night_cloud_pct:>12.0f} | "
+            f"{d.wind_850hpa:>17.0f} | {_fmt_isotherm(d.refreeze_isotherm, d.refreeze_hour):>21} | "
+            f"{_fmt_isotherm(d.melt_isotherm, d.melt_hour):>16} | {d.night_cloud_pct:>12.0f} | "
             f"{d.temp_min:>5.1f}/{d.temp_max:<5.1f}{storm}"
         )
     return "\n".join(lines)
@@ -355,8 +355,8 @@ def _table_row(d: _DayForecast, today_str: str, elevation_max: int | None = None
     date_cell = f"**{d.date}**" if d.date == today_str else d.date
     wind_cell = f"{d.wind_850hpa:.0f} km/h" if d.wind_850hpa > 0 else "—"
     cloud_cell = f"{d.night_cloud_pct:.0f}%" if d.night_cloud_pct >= 0 else "—"
-    rfz_fmt  = _fmt_iso(d.refreeze_isotherm, d.refreeze_hour)
-    melt_fmt = _fmt_iso(d.melt_isotherm,     d.melt_hour)
+    rfz_fmt  = _fmt_isotherm(d.refreeze_isotherm, d.refreeze_hour)
+    melt_fmt = _fmt_isotherm(d.melt_isotherm,     d.melt_hour)
     rfz_cell  = f"**{rfz_fmt} ⚠**" if _isotherm_above(d.refreeze_isotherm, elevation_max) else rfz_fmt
     return (
         f"| {date_cell}{storm} "

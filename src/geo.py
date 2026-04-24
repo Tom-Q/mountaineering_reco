@@ -23,7 +23,9 @@ import math
 import time
 from pathlib import Path
 
-import requests
+import requests_cache
+
+from src.spatial import point_in_geometry
 
 # ---------------------------------------------------------------------------
 # Alps/Pyrenees: point-in-polygon against the French massif GeoJSON
@@ -45,46 +47,10 @@ def _load_massif_features() -> list:
     return _massif_features
 
 
-def _ray_cast(lat: float, lon: float, ring: list) -> bool:
-    inside = False
-    n = len(ring)
-    j = n - 1
-    for i in range(n):
-        xi, yi = ring[i][0], ring[i][1]   # GeoJSON stores [lon, lat]
-        xj, yj = ring[j][0], ring[j][1]
-        if ((yi > lat) != (yj > lat)) and (
-            lon < (xj - xi) * (lat - yi) / (yj - yi) + xi
-        ):
-            inside = not inside
-        j = i
-    return inside
-
-
-def _point_in_polygon(lat: float, lon: float, rings: list) -> bool:
-    if not rings:
-        return False
-    if not _ray_cast(lat, lon, rings[0]):
-        return False
-    for hole in rings[1:]:
-        if _ray_cast(lat, lon, hole):
-            return False
-    return True
-
-
-def _point_in_multipolygon(lat: float, lon: float, geometry: dict) -> bool:
-    gtype = geometry.get("type", "")
-    coords = geometry.get("coordinates", [])
-    if gtype == "Polygon":
-        return _point_in_polygon(lat, lon, coords)
-    if gtype == "MultiPolygon":
-        return any(_point_in_polygon(lat, lon, poly) for poly in coords)
-    return False
-
-
 def _classify_alps_pyrenees(lat: float, lon: float) -> str | None:
     """Return 'alps', 'pyrenees', or None if the point isn't in the French massif GeoJSON."""
     for feature in _load_massif_features():
-        if _point_in_multipolygon(lat, lon, feature["geometry"]):
+        if point_in_geometry(lat, lon, feature["geometry"]):
             mountain = feature["properties"].get("mountain", "")
             if mountain == "Pyrenees":
                 return "pyrenees"
@@ -151,6 +117,7 @@ _NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 _NOMINATIM_HEADERS = {"User-Agent": "mountaineering-reco/1.0"}
 _geocode_cache: dict | None = None
 _last_nominatim_request: float = 0.0
+_nominatim_session = requests_cache.CachedSession(".cache/nominatim_cache", expire_after=86400 * 30)
 
 
 def _load_geocode_cache() -> dict:
@@ -221,7 +188,7 @@ def _nominatim_query(query: str, strict: bool = False) -> dict | None:
     if elapsed < 1.0:
         time.sleep(1.0 - elapsed)
     try:
-        r = requests.get(
+        r = _nominatim_session.get(
             _NOMINATIM_URL,
             params={"q": query, "format": "json", "limit": 5},
             headers=_NOMINATIM_HEADERS,
