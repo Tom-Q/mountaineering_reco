@@ -1,143 +1,179 @@
-# Scraping Plan — Lemke, SAC, Montagnes-Magazine
+# Scraping Plan
 
 General pattern for all scrapers:
 - Output to `data/<source>.db` (SQLite)
 - Index into shared ChromaDB collection via `scrapers/build_<source>_index.py`
-- Coordinates via `scrapers/geocode_utils.py` fallback chain
+- Coordinates via `scrapers/geocode_utils.py` fallback chain (or exact if available)
 - Same two-table schema as passion-alpes: `topos` + `topo_images`
 
 ---
 
-## 1. Lemke Climbs — PRIORITY 1
+## Done
+
+### passion-alpes.com
+- `scrapers/passion_alpes_scrape.py` + `scrapers/build_passion_alpes_index.py`
+- 148 topos, French Alps, French language, full topo text
+- Indexed: 166 ChromaDB documents
+
+### SAC Swiss Alpine Club
+- `scrapers/sac_scrape.py` + `scrapers/build_sac_index.py`
+- 820 routes across 499 summits, Swiss Alps, German language
+- Pure API scraper (`suissealpine.sac-cas.ch/api/1/poi/search`) — no HTML needed
+- Exact WGS84 coordinates from API (Swiss LV95 converted)
+- Note: descriptions are summit-level overview only; per-route topo text is behind paywall and not in the API
+- Indexed: 820 ChromaDB documents
+- `src/rag.py`: `get_sac_topo()` for deep-dive retrieval
+- `src/tools.py`: `retrieve_document` handles `sac_id`
+
+### SummitPost
+- `scrapers/summitpost_scrape.py` + `scrapers/summitpost_collect_urls.js`
+- ~4800 mountaineering routes, global coverage, English
+- Indexed: 12,731 ChromaDB documents
+
+---
+
+## Backlog
+
+### 1. hikr.org — PRIORITY 1
+
+**URL:** https://www.hikr.org  
+**Scale:** Tens of thousands of trip reports  
+**Language:** DE, FR, IT, EN (community site, multilingual)  
+**Format:** Community trip reports with photos, GPS tracks, structured metadata (grade, elevation gain, duration, region)  
+**Coverage:** Primarily Swiss/Austrian/French Alps, but global  
+**Bot protection:** Unknown — needs verification
+
+### URL discovery
+hikr uses a structured search/filter system. Likely options:
+- Browse by activity type (Hochtour, Skitour, etc.) and region
+- May have an underlying API similar to SAC — check DevTools Network tab first
+- Fall back to browser JS script if JS-rendered
+
+Recommended first step: open the mountaineering/Hochtour listing in a browser, inspect XHR calls in DevTools.
+
+### Per-page extraction
+Trip reports have structured header fields (grade, elevation, duration, date) followed by free-text narrative and photos. Rich narrative content makes these valuable for RAG.
+
+### Coordinates
+GPS tracks are often attached — if accessible, these give exact coordinates. Otherwise summit geocoding from title should work well (reports typically name the summit).
+
+### Notes
+- Very large scale — may want to filter to alpine/mountaineering discipline and Alps region rather than scraping everything
+- Reports have dates → useful for currency of conditions info
+- Community content: quality varies, but volume is high
+
+---
+
+### 2. Lemke Climbs — PRIORITY 2
 
 **URL:** https://www.lemkeclimbs.com/  
 **Scale:** ~150 routes  
 **Language:** English  
 **Format:** Personal trip reports, 2500–3000 words, extensive photos  
-**Coverage:** Primarily North American (North Cascades, Colorado, Wyoming, Alaska, etc.) plus some international  
-**Bot protection:** None — static Weebly site, plain HTML  
+**Coverage:** Primarily North American (North Cascades, Colorado, Wyoming, Alaska) plus some international  
+**Bot protection:** None — static Weebly site, plain HTML
 
 ### URL discovery
-Walk the sidebar navigation: the site has a nested geographic menu (region → sub-region → route).
-Entry point pages to crawl:
+Walk the sidebar navigation (region → sub-region → route). Entry point pages:
 - https://www.lemkeclimbs.com/north-cascades.html
 - https://www.lemkeclimbs.com/colorado.html
-- etc. (one per region in the sidebar)
+- etc.
 
-All route pages follow the pattern: `lemkeclimbs.com/route-name-with-hyphens.html`
-
-Strategy: fetch the homepage/regional index pages, extract all `.html` links from the sidebar nav, deduplicate. No JS needed.
+All route pages: `lemkeclimbs.com/route-name-with-hyphens.html`. No JS needed.
 
 ### Per-page extraction
-- Title: `<h1>` or page title
-- Full text: main content area (Weebly uses a standard content div)
-- Photos: `<img>` tags in the main content, with captions
-- Grade/region: parse from title or first paragraph (e.g. "Class 5.4", "WI3", region from URL or nav context)
-- No structured fields — store everything in `full_text`, let RAG handle it
+- Title: `<h1>`
+- Full text: main Weebly content div
+- Photos: `<img>` tags in main content
+- Grade/region: parse from title or first paragraph
 
 ### Coordinates
-Titles often name a specific peak → geocode_utils summit chain should work well for North American peaks.
+Summit names in titles → geocode_utils summit chain works well for North American peaks.
 
 ### Notes
-- Trip reports, not topos — richer narrative, less structured. Fine for RAG.
-- Many routes have "year" context (dates of ascent) — useful for currency assessment.
+- Trip reports, not topos — richer narrative, less structured
+- Dates of ascent present → useful for currency
 
 ---
 
-## 2. SAC Swiss Alpine Club — PRIORITY 2
+### 3. andeshandbook.org — PRIORITY 3
 
-**URL:** https://www.sac-cas.ch/en/huts-and-tours/sac-route-portal/  
-**Scale:** ~500 alpine routes  
-**Language:** DE (primary — most complete), FR, IT, EN  
-**Format:** Structured route cards: grade, ascent time, elevation, description, photos, related huts  
-**Bot protection:** None on individual pages — confirmed public content  
-
-### URL discovery — the hard part
-
-Individual route pages confirmed working:
-`https://www.sac-cas.ch/en/huts-and-tours/sac-route-portal/[NUMERIC_ID]/alpine_tour`
-
-Example confirmed: `/1209/alpine_tour` = Monte Rosso
-
-The *listing/index* is JS-rendered and can't be crawled with requests. Two options:
-
-**Option A — Browser JS script (like summitpost_collect_urls.js)**  
-Navigate to the portal filter page, intercept the API calls or walk the rendered DOM.
-Write a console script similar to `scrapers/summitpost_collect_urls.js` that:
-1. Opens https://www.sac-cas.ch/en/huts-and-tours/sac-route-portal/?discipline=alpine_tour
-2. Scrolls/paginates through all results
-3. Collects route IDs or full URLs
-4. Downloads as a text file
-
-**Option B — Find the underlying API**  
-Open DevTools → Network tab on the portal page, filter XHR/fetch requests while browsing.
-The portal likely calls an internal API like `/api/tours?discipline=alpine_tour&page=N`.
-If found, can call it directly with requests (much faster than browser scripting).
-
-**Recommended:** Try Option B first (inspect network requests), fall back to Option A.
-
-### Language decision
-Scrape **German** (`/de/huetten-und-touren/sac-tourenportal/[ID]/alpine_tour`) as primary.
-German will have the most complete content for a Swiss alpine club.
-The multilingual embedding model handles German natively.
-
-### Per-page extraction
-Confirmed structure on route pages:
-- Peak name + elevation in `<h1>`
-- Route table: difficulty (AD+), ascent time, descent time, elevation gain
-- Description text in main content div
-- Photo gallery
-- Related huts (useful metadata)
-- Archive routes (historical variations — scrape as part of full_text)
-
-HTML structure: semantic `<section>` tags, route details in `<table>` format.
-
-### Coordinates
-SAC routes are Swiss/French/Italian Alps — geocode_utils region centroids cover most of this.
-Summit geocoding from peak name should work well (named Swiss peaks are well-indexed in OSM).
-
----
-
-## 3. Montagnes-Magazine — PRIORITY 3
-
-**URL:** https://www.montagnes-magazine.com/topos?categorie=Alpinisme  
-(also: `?categorie=glace` for ice climbing)  
-**Scale:** ~150 articles  
-**Language:** French  
-**Format:** Editorial articles, many covering multiple routes per article  
-**Bot protection:** Consistently blocks WebFetch — likely JS-rendered or aggressive rate limiting  
+**URL:** https://www.andeshandbook.org  
+**Scale:** Hundreds of routes  
+**Language:** Spanish and English  
+**Format:** Structured route guides with approach, route description, descent, grade, photos  
+**Coverage:** Andes (primarily Chile and Argentina — Aconcagua region, Patagonia, central Chile/Argentina volcanoes)  
+**Bot protection:** Unknown — needs verification
 
 ### URL discovery
-The listing page is JS-rendered. Same approach as SAC:
+Site likely has a route index browsable by region or mountain range. Check for:
+- A paginated route listing
+- Underlying API (check DevTools)
+- Static HTML index amenable to `requests`
 
-**Browser JS script** to collect article URLs:
-1. Open the topo listing page in browser
-2. Scroll to load all articles (infinite scroll or pagination)
-3. Collect all article links
-4. Download as text file
-
-### Per-page content
-Articles may cover 1–5 routes each. Options:
-- **Simple:** Store the full article as one DB record, let RAG chunk it. Easiest to implement.
-- **Better:** Try to detect route boundaries within the article (look for route name headers) and split into sub-records. More work, better retrieval precision.
-
-Recommendation: start simple (one article = one record), revisit if retrieval quality suffers.
-
-### Paywall check
-WebFetch failures may be bot protection, not a paywall. Need to verify with actual browser visit whether article content is fully public or requires subscription. Check before building scraper.
+### Per-page extraction
+Structured route pages expected: approach, route description, descent as separate sections. Store each section in `full_text`, let RAG chunk.
 
 ### Coordinates
-Articles often name a massif or valley in the URL slug (e.g. `chamonix-aiguilles-rouges`).
-Parse massif from URL → geocode_utils region centroid chain.
+Andes peaks are well-indexed in OSM — summit geocoding should work. Some peaks (volcanoes, high Andes) may need manual centroid fallbacks added to `geocode_utils.py`.
+
+### Notes
+- Unique geographic coverage not in other sources (South America)
+- Bilingual content — the multilingual embedding model handles Spanish natively
+- Verify paywall status before scraping
 
 ---
 
-## What's already done (context for next session)
+### 4. verticalpirate-escalade.com — PRIORITY 4
 
-- `scrapers/passion_alpes_scrape.py` — working scraper for passion-alpes.com (148 topos)
-- `scrapers/build_passion_alpes_index.py` — indexes into ChromaDB with geocoding
-- `scrapers/geocode_utils.py` — shared geocoding fallback chain (summit → region centroid)
-- `src/rag.py` — `get_passion_alpes_topo()` for deep-dive retrieval
-- `src/tools.py` — `search_documents` and `retrieve_document` handle both SummitPost and passion-alpes
-- ChromaDB collection `route_sections`: 12,897 documents (SummitPost + passion-alpes)
-- `scrapers/summitpost_collect_urls.js` — reference implementation for browser-based URL collection
+**URL:** https://www.verticalpirate-escalade.com  
+**Scale:** Unknown  
+**Language:** French  
+**Format:** Rock climbing topos (escalade)  
+**Coverage:** Likely French Alps / Mediterranean limestone  
+**Bot protection:** Unknown — needs verification
+
+### URL discovery
+Unknown — needs a browser visit to understand site structure. Check for:
+- Static topo listing page
+- JS-rendered content requiring browser script
+
+### Per-page extraction
+Rock climbing topos typically have: sector name, route name, grade (French sport/trad), length, description. May include topo diagrams (images).
+
+### Coordinates
+Sector/crag names → geocode_utils. Rock climbing crags are often well-indexed in OSM.
+
+### Notes
+- Rock climbing focus complements the alpine content in the other sources
+- Verify scale and content quality before investing scraping effort
+- Lower priority than the alpine sources given the app's alpine focus
+
+---
+
+### 5. Montagnes-Magazine — PRIORITY 5
+
+**URL:** https://www.montagnes-magazine.com/topos?categorie=Alpinisme  
+(also: `?categorie=glace` for ice)  
+**Scale:** ~150 articles  
+**Language:** French  
+**Format:** Editorial articles, often covering multiple routes per article  
+**Bot protection:** Consistently blocks WebFetch — JS-rendered or aggressive rate limiting
+
+### URL discovery
+JS-rendered listing. Browser JS script required:
+1. Open the topo listing page
+2. Scroll to load all articles
+3. Collect article links, download as text file
+
+### Per-page content
+- Simple: one article = one DB record, let RAG chunk
+- Better: detect route boundaries within article, split into sub-records
+
+Start simple, revisit if retrieval quality suffers.
+
+### Paywall check
+WebFetch failures may be bot protection, not paywall. Verify with actual browser visit before building scraper.
+
+### Coordinates
+Parse massif from URL slug (e.g. `chamonix-aiguilles-rouges`) → geocode_utils region centroid.
