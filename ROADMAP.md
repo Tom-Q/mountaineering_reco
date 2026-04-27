@@ -20,37 +20,44 @@ Build a local hut database to eliminate per-request API calls for static hut inf
 
 **Storage:** local SQLite or JSON; refresh on a schedule (weekly/monthly for operational data, rarely for static).
 
-### Phase 4 — Topo scraping + RAG 🔄 In progress
+### Phase 4 — Topo scraping ✅ Done
 
-Build a curated local vector store for static route beta.
+Built a curated local corpus of static route beta and mountaineering reference material. All scrapers live in the private repo (`Tom-Q/mountaineering_scraper`).
 
-**SummitPost** — first corpus, scraping complete. ~2,300 mountaineering routes scraped into `data/summitpost.db` (structured metadata + section text + cover image). RAG indexing next.
+**Corpus:**
 
-**Further corpus candidates:**
-
-| Source | Coverage | Notes |
+| Source | Coverage | Status |
 |---|---|---|
-| `sac-cas.ch` | Switzerland | SAC route database |
-| `verticalpirate-escalade.com` | French-language rock + alpine (Mediterranean + worldwide) | Guide's personal site; fetchable |
-| `desnivel.com` | Spain, Pyrenees | Spain's main alpinism publication. Spanish-language. |
-| `27crags.com` | Scandinavia | Free topo + logbook, strong Norwegian/Swedish coverage |
-| `hikr.org` | Alps multilingual | User trip reports in FR/DE/IT/EN. Strong Swiss/Austrian/Italian coverage. Bot-blocked. |
-| `mountainproject.com` | North America | Thin on European alpine, strong for NA rock and alpine |
-| `lemkeclimbs.com` | Alps | Rich English-language topo source |
 | Camptocamp route pages | Worldwide | Complement to API data already integrated |
-| Park/reserve access rules | France, Italy | Seasonal closures, permits — Écrins, Mercantour, etc. |
+| SummitPost | Worldwide mountaineering routes | ✅ ~2,300 routes in `summitpost.db` |
+| hikr.org | Alps multilingual trip reports (DE/IT/FR/EN) | ✅ ~10,700 reports in `hikr.db` |
+| passion-alpes.com | French-language Alpine routes | ✅ `passion_alpes.db` |
+| lemkeclimbs.com | English-language topos, mostly Americas | ✅ `lemkeclimbs.db` |
+| SAC route database | Switzerland | ✅ `sac.db` |
+| Freedom of the Hills (10th ed.) | General mountaineering reference | ✅ `freedom_of_the_hills.db` |
+| Mémento FFCAM / UIAA (FR) | General mountaineering reference | ✅ `memento_ffcam.db` |
 
-**Historical trip reports:** dated reports remain useful for seasonal pattern recognition. Include with explicit date metadata so the LLM can weight recency appropriately.
 
-**Stack:** Chroma or LanceDB (local, no infrastructure). Embed with sentence-transformers or Claude. ~500–2000 documents total — manageable.
+### Phase 4.5 — RAG: document cards + retrieval 🔄 Next
 
-**Ethics / scraping policy:**
-- Respect `robots.txt` and terms of service
-- Rate-limit aggressively (≥1 req/5s), cache permanently for static content
-- Personal/non-commercial use only
-- For bot-blocked sites: attempt politely, fall back to manual lookup links on failure
+Pure embedding similarity over raw mountaineering text doesn't work well: all content is semantically similar by domain, and multilingual variation adds noise rather than signal. Approach:
 
-### Phase 5 — Hosting + web frontend
+1. **Generate cards** — for each chunk in each DB, call Claude to produce a structured card: one-sentence summary, type (technique / safety / environment / equipment / navigation / physiology…), and tags. Store in the existing DB tables (`summary`, `type`, `tags` columns).
+2. **Embed cards, not raw text** — index card summaries in ChromaDB rather than full chunk text. Summaries are more differentiated and language-normalised.
+3. **Retrieve then read** — at query time, retrieve matching cards, then pass the full chunk text to the LLM. The card acts as a routing layer.
+4. **Test** — evaluate retrieval quality on a set of representative queries before wiring into the chat loop.
+
+**Stack:** ChromaDB (local), `paraphrase-multilingual-mpnet-base-v2` embeddings, Claude Haiku for card generation.
+
+### Phase 5 — UI and prompting improvements
+
+- **Report template overhaul** — adopt consistent sections: Overview → Route description → Crux → Hazards → Current Conditions → Trip Reports → Information Gaps → Sources. See backlog for full spec.
+- **Weather prompt verbosity** — instruct model to report facts rather than draw stability conclusions.
+- **Daylight calculation** — sunrise/sunset/civil twilight for route coordinates and planned date using the `astral` library.
+- **Weather: multiple elevation bands** — fetch at trailhead, mid-route, summit for routes with large altitude gain.
+- **C2C profile integration** — load grades from a public Camptocamp user ID via `GET /profiles/{user_id}`.
+
+### Phase 6 — Hosting + web frontend
 
 Expose the tool as an API and embed it in the Astro website (thomas-colin.com, hosted on Netlify free tier).
 
@@ -107,8 +114,6 @@ for s in sorted(stubs, key=lambda x: x.get("date_start") or "", reverse=True):
     date_lines.append(f"- {d}  ({age})  rating: {r}")
 ```
 
-
-
 ### Multi-agent parallelism
 Dispatch separate fetch agents simultaneously (one per data source), each returning a strict JSON contract, then merge results. Reduces latency and keeps concerns separated.
 
@@ -139,16 +144,6 @@ Load grades from a public Camptocamp numeric user ID and populate the sidebar se
 
 ### Weather prompt verbosity
 LLM weather output is too verbose. Fix: instruct the model to report facts rather than draw stability conclusions.
-
-### NA source integration (good-to-have, worldwide applicability)
-Add support for North American mountaineering sources. These are lower priority than European coverage but would make the app more universally useful:
-- **PeakBagger** — peak database + ascent logs with trip reports and GPX tracks. Has an unofficial CLI wrapper (peakbagger-cli).
-- **WTA** (Washington Trails Association) — detailed trip reports for PNW. Has an AJAX endpoint for report listing.
-- **AllTrails** — broad coverage but JS-rendered, hard to scrape. Useful for hiker-grade routes.
-- **Mountaineers.org** — technical route descriptions for Cascades.
-- **NWAC** — Northwest Avalanche Center. Publishes a JSON API; would slot in alongside EAWS/MF.
-
-Prerequisite: the tool-use architecture (Phase 1) makes this much easier to add incrementally.
 
 ### Meteoblue for weather
 Switch from Open-Meteo to [meteoblue](https://www.meteoblue.com) for weather forecasts. Meteoblue is better quality (proprietary model, higher resolution in the Alps, multi-model ensemble), and Camptocamp already links to it per-hut. Requires an API key (paid). Relevant once the tool-use architecture is in place — the weather tool is the natural integration point.
