@@ -221,7 +221,4 @@ data/
 memento_toc.txt
 
 # Scrapers (live in Tom-Q/mountaineering_scraper)
-scrapers/freedom_load.py
-scrapers/memento_load.py
-scrapers/hikr_scrape.js
-scrapers/hikr_load.py
+scrapers/
