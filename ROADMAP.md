@@ -30,9 +30,6 @@ Build a curated local vector store for static route beta.
 
 | Source | Coverage | Notes |
 |---|---|---|
-| `montagnes-magazine.com` | French Alps, Francophone Switzerland, Aosta Valley | High-quality topos for classic routes |
-| `passion-alpes.com` | Mont Blanc massif, Aiguilles Rouges | ~150 topos, mostly Mont Blanc area. Fetchable. |
-| `bergsteigen.com` | German-speaking Alps (Austria, Bavaria, Swiss-German) | Full route sheets: grade, gear, approach, season |
 | `sac-cas.ch` | Switzerland | SAC route database |
 | `verticalpirate-escalade.com` | French-language rock + alpine (Mediterranean + worldwide) | Guide's personal site; fetchable |
 | `desnivel.com` | Spain, Pyrenees | Spain's main alpinism publication. Spanish-language. |

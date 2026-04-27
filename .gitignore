@@ -209,8 +209,19 @@ __marimo__/
 secrets/
 _external/
 
-# Scraper and data — kept in private repo (Tom-Q/summitpost_scraper)
+# Scraper and data — kept in private repo (Tom-Q/mountaineering_scraper)
 src/summitpost.py
 scripts/*
 !scripts/draw_ranges_map*
 data/
+
+# Copyrighted book source files
+*.epub
+*.pdf
+memento_toc.txt
+
+# Scrapers (live in Tom-Q/mountaineering_scraper)
+scrapers/freedom_load.py
+scrapers/memento_load.py
+scrapers/hikr_scrape.js
+scrapers/hikr_load.py
