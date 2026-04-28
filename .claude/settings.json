@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "deny": [
+      "Write(/tmp/*)",
+      "Write(/var/*)",
+      "Write(/etc/*)",
+      "Write(/usr/*)",
+      "Write(/home/thomas/.config/*)",
+      "Write(/home/thomas/.bashrc)",
+      "Write(/home/thomas/.profile)",
+      "Edit(/tmp/*)",
+      "Edit(/var/*)",
+      "Edit(/etc/*)",
+      "Edit(/usr/*)",
+      "Edit(/home/thomas/.config/*)",
+      "Edit(/home/thomas/.bashrc)",
+      "Edit(/home/thomas/.profile)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/safety_guard.py"
+          }
+        ]
+      }
+    ]
+  }
+}

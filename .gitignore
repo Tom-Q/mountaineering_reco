@@ -209,6 +209,9 @@ __marimo__/
 secrets/
 _external/
 
+# Runtime logs
+.logs/
+
 # Scraper and data — kept in private repo (Tom-Q/mountaineering_scraper)
 src/summitpost.py
 scripts/*

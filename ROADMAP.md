@@ -10,10 +10,8 @@
 Build a local hut database to eliminate per-request API calls for static hut info.
 
 **Sources:**
-- **refuges.info API** — French huts. Free, no auth, GeoJSON, full detail including comments. Endpoint: `/api/massif` or `/api/bbox` with `detail=full`.
-- **SAC hut finder** (`sac-cas.ch`) — Swiss huts
-- **DAV hut finder** (`alpenverein.de`) — German/Austrian huts
-- **CAI / refugi.info** — Italian huts
+- **refuges.info API** — worldwide huts (not just France). Free, no auth, GeoJSON, full detail. Covers refuges, unmanned cabanes, and bivouacs globally. Endpoint: `/api/massif/<id>?detail=full`. Collection script: `scripts/collect_refuges.py` → `data/refuges.db`.
+- **SAC / DAV / CAI hut finders** — secondary sources for richer metadata only (guardian contacts, booking, prices) where refuges.info data is thin. Not needed for basic hut location coverage.
 - **Camptocamp hut pages** — cross-reference; useful for meteoblue links, route lists, guardian contacts
 
 **Data to cache per hut:** coordinates, altitude, capacity, opening dates, guardian contact, access description, price, linked routes, meteoblue URL.
@@ -42,7 +40,7 @@ Built a curated local corpus of static route beta and mountaineering reference m
 
 Pure embedding similarity over raw mountaineering text doesn't work well: all content is semantically similar by domain, and multilingual variation adds noise rather than signal. Approach:
 
-1. **Generate cards** — for each chunk in each DB, call Claude to produce a structured card: one-sentence summary, type (technique / safety / environment / equipment / navigation / physiology…), and tags. Store in the existing DB tables (`summary`, `type`, `tags` columns).
+1. **Generate cards** — for each chunk in each DB, call Claude to produce a structured card: one-sentence summary, type (multiple at once possible) (route description, trip report, hut info, manual, other), and tags. We'll want especially: GPS coordinates if available, language, grade if available, quality if available, route name (potentially in multiple languages for routes with obvious translations e.g. "south ridge"?), DB of origin and URL, ...  Store in the existing DB tables (`summary`, `type`, `tags` columns).
 2. **Embed cards, not raw text** — index card summaries in ChromaDB rather than full chunk text. Summaries are more differentiated and language-normalised.
 3. **Retrieve then read** — at query time, retrieve matching cards, then pass the full chunk text to the LLM. The card acts as a routing layer.
 4. **Test** — evaluate retrieval quality on a set of representative queries before wiring into the chat loop.
