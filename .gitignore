@@ -214,8 +214,10 @@ _external/
 
 # Scraper and data — kept in private repo (Tom-Q/mountaineering_scraper)
 src/summitpost.py
-scripts/*
-!scripts/draw_ranges_map*
+# Scraping scripts — live in Tom-Q/mountaineering_scraper
+scripts/collect_refuges.py
+scripts/enrich_refuges.py
+scripts/enrich_unmatched.py
 data/
 
 # Copyrighted book source files

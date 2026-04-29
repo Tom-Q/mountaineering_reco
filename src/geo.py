@@ -21,12 +21,23 @@ from __future__ import annotations
 import json
 import math
 import time
+from functools import lru_cache
 from pathlib import Path
 
 import requests
 import requests_cache
+import yaml
 
 from src.spatial import point_in_geometry
+
+_SNOW_SEASONS_PATH = Path(__file__).parent.parent / "domain_knowledge" / "snow_seasons.yaml"
+
+# GMBA ancestor IDs for ranges whose yaml entry is null (no season window),
+# but which we still want to classify for downstream use.
+_GMBA_NULL_RANGE_IDS: dict[int, str] = {
+    11400: "himalaya",
+    12123: "northern_andes",
+}
 
 # ---------------------------------------------------------------------------
 # Alps/Pyrenees: point-in-polygon against the French massif GeoJSON
@@ -106,6 +117,45 @@ def classify_range(lat: float, lon: float) -> str:
     for name, lat_min, lon_min, lat_max, lon_max in _RANGE_BBOXES:
         if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
             return name
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# GMBA ancestry → snow season key
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=1)
+def _build_gmba_season_lookup() -> dict[int, str]:
+    """Build a {gmba_ancestor_id: season_key} dict from snow_seasons.yaml."""
+    seasons = yaml.safe_load(_SNOW_SEASONS_PATH.read_text())["ranges"]
+    lookup: dict[int, str] = {}
+    for key, entry in seasons.items():
+        if entry and isinstance(entry, dict):
+            for gid in entry.get("gmba_ancestor_ids") or []:
+                lookup[int(gid)] = key
+    lookup.update(_GMBA_NULL_RANGE_IDS)
+    return lookup
+
+
+def gmba_ancestry_to_season_key(ancestry: str) -> str:
+    """
+    Map a GMBA ancestry string to a snow_season key.
+
+    Accepts single-chain format ("12155 > 10001 > 10005 > 10012") or
+    pipe-separated multi-massif format (as stored in gmba_ancestry for
+    text-region enriched documents: "12155 > ... > 10012 | 12155 > ... > 10061").
+    Returns "unknown" if no ancestor ID matches any known range.
+    """
+    if not ancestry:
+        return "unknown"
+    lookup = _build_gmba_season_lookup()
+    for chain in ancestry.split("|"):
+        for part in chain.split(">"):
+            part = part.strip()
+            if part.isdigit():
+                key = lookup.get(int(part))
+                if key:
+                    return key
     return "unknown"
 
 

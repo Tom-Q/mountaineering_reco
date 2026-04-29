@@ -8,6 +8,9 @@
 # Each range entry has:
 #   season_start: [month, day]   first day of the accumulation season
 #   season_end:   [month, day]   last day of the accumulation season
+#   gmba_ancestor_ids: [int, ...]  GMBA Aggregated polygon IDs whose presence
+#                                   in a document's gmba_ancestry signals this range.
+#                                   Used by src/geo.gmba_ancestry_to_season_key().
 #
 # Ranges with no entry (or null) show recent snowfall only.
 # "himalaya" is a special case handled in code — it returns a fixed note
@@ -23,106 +26,126 @@ ranges:
   alps:
     season_start: [11, 1]
     season_end:   [5, 31]
+    gmba_ancestor_ids: [10001]   # "Alps" L4
     # Nov–Apr is the de facto standard per SLF, Météo-France, EAWS.
     # October is considered "early season" and highly variable year-to-year.
 
   pyrenees:
     season_start: [11, 1]
     season_end:   [5, 31]
+    gmba_ancestor_ids: [11756]   # "Pyrenees" L4
     # Météo-France avalanche bulletins run mid-December through end of April.
 
   caucasus:
     season_start: [10, 1]
     season_end:   [5, 31]
+    gmba_ancestor_ids: [12686]   # "Caucasus Mountains" L3
     # Slightly earlier than Alps due to mid-latitude westerlies + Arctic air masses.
 
   scandinavia:
     season_start: [10, 1]
     season_end:   [4, 30]
+    gmba_ancestor_ids: [11820]   # "Scandinavian Mountains" L4
     # Lasting snow at altitude from late September; northern resorts open October.
 
   japan:
     season_start: [12, 1]
     season_end:   [4, 30]
+    gmba_ancestor_ids: [11435]   # "Japanese Alps" L5
     # Winter monsoon off the Sea of Japan drives heavy accumulation from December,
     # later than the European Alps despite similar latitude.
 
   tian_shan:
     season_start: [10, 1]
     season_end:   [4, 30]
+    gmba_ancestor_ids: [12174]   # "Tian Shan" L3
     # Continental climate, similar timing to Caucasus. No monsoon influence.
 
   altai:
     season_start: [11, 1]
     season_end:   [4, 30]
+    gmba_ancestor_ids: [11123]   # "Altai Mountains" L4
     # Siberian continental; first high-altitude snows late September,
     # but meaningful accumulation from November.
 
   karakoram:
     season_start: [11, 1]
     season_end:   [4, 30]
+    gmba_ancestor_ids: [11464]   # "Karakoram" L3
     # Driven by winter westerlies (Dec–Mar peak) — opposite of the Himalaya proper.
     # The "Karakoram anomaly": glaciers gain mass in winter, not the monsoon summer.
 
   hindu_kush:
     season_start: [11, 1]
     season_end:   [4, 30]
+    gmba_ancestor_ids: [11401]   # "Hindu Kush" L3
     # Similar to Karakoram; westerly-driven winter precipitation.
 
   himalaya: null
     # Monsoon-accumulation range: ~75% of annual snowfall during the SW monsoon
     # (June–September). Seasonal totals are misleading for winter/spring planning.
     # Code outputs a fixed note directing users to local sources instead of fetching data.
+    # GMBA: 11400 ("Himalayas" L3) — handled in geo.gmba_ancestry_to_season_key.
 
   alaska:
     season_start: [9, 1]
     season_end:   [5, 31]
+    gmba_ancestor_ids: [15783]   # "Alaska-Yukon Ranges" L3
     # Year-round snowpack at altitude; meaningful accumulation begins September.
 
   pacific_nw:
     season_start: [11, 15]
     season_end:   [4, 30]
+    gmba_ancestor_ids: [12385]   # "Pacific Coast Ranges" L3 (approx; covers Cascades)
     # Heavy maritime snowpack; Northwest Avalanche Center operations start mid-November.
 
   sierra_nevada:
     season_start: [11, 1]
     season_end:   [4, 30]
+    gmba_ancestor_ids: [11928]   # "Sierra Nevada" L4
     # Mediterranean climate; April 1 is the reference date for annual snowpack measurement.
 
   colorado_rockies:
     season_start: [10, 1]
     season_end:   [5, 31]
+    gmba_ancestor_ids: [12208]   # "Southern Rocky Mountains" L4
     # Continental; October faceting events matter for snowpack structure.
 
   appalachians:
     season_start: [11, 1]
     season_end:   [3, 31]
+    gmba_ancestor_ids: [11134]   # "Appalachian Mountains" L2
     # Alpine conditions thin and unreliable; shorter season than western ranges.
 
   mexico_volcanic: null
     # Year-round permanent ice on rapidly shrinking glaciers (Orizaba, Iztaccíhuatl).
     # No meaningful seasonal accumulation cycle; best climbing October–March.
+    # GMBA: no clean single ancestor polygon — left unmatched.
 
   # --- Southern Hemisphere ---
 
   patagonia:
     season_start: [5, 1]
     season_end:   [10, 31]
+    gmba_ancestor_ids: [13064]   # "Patagonian Andes" L4
     # Southern Hemisphere winter dominant. Season stays within one calendar year.
 
   central_andes:
     season_start: [4, 1]
     season_end:   [9, 30]
+    gmba_ancestor_ids: [12122]   # "Central Andes" L3
     # Austral winter (June–August) = wet/accumulation season driven by westerlies.
     # Austral summer (December–February) = dry season; best climbing window.
 
   new_zealand:
     season_start: [5, 1]
     season_end:   [10, 31]
+    gmba_ancestor_ids: [12193]   # "Southern Alps" L4 (New Zealand)
     # Southern Hemisphere; ski fields open mid-June, snow from May at altitude.
 
   northern_andes: null
     # Equatorial/tropical; year-round snow at altitude with no distinct season.
+    # GMBA: 12123 ("Northern Andes" L3) — handled in geo.gmba_ancestry_to_season_key.
 
   # --- Unclassified ---
 

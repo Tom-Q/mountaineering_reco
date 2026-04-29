@@ -47,6 +47,14 @@ snowfall accumulation alongside the always-on recent 15-day signal.
 | Vosges / low-altitude ranges | Low altitude, unreliable snow; not a meaningful alpine season |
 | Unknown | Fall-through for unclassified coords |
 
+## GMBA integration
+
+Each non-null range entry in `snow_seasons.yaml` has a `gmba_ancestor_ids` field listing one or more GMBA Aggregated polygon IDs. When a corpus document has a `gmba_ancestry` column (e.g. `"12155 > 10001 > 10005 > 10012"`), `src/geo.gmba_ancestry_to_season_key(ancestry)` maps it to the matching snow_season key by checking whether any ancestor ID in the chain appears in the lookup.
+
+Null-season ranges (himalaya, northern_andes) don't carry `gmba_ancestor_ids` in the YAML; their GMBA IDs are hardcoded in `geo._GMBA_NULL_RANGE_IDS` so they still classify correctly (returning `"himalaya"` rather than `"unknown"`, which matters for the special handling in `weather.py`).
+
+This is distinct from `classify_range(lat, lon)`, which is used for live Camptocamp routes and remains the primary runtime classification path.
+
 ## Notes on implementation
 
 - Alps and Pyrenees are classified by **point-in-polygon** against `liste-massifs.geojson`
