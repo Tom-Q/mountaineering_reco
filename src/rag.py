@@ -20,13 +20,11 @@ _CHROMA_PATH = Path(__file__).parent.parent / "data" / "chroma"
 _DB_PATH = Path(__file__).parent.parent / "data" / "summitpost.db"
 _PA_DB_PATH = Path(__file__).parent.parent / "data" / "passion_alpes.db"
 _SAC_DB_PATH = Path(__file__).parent.parent / "data" / "sac.db"
-_RANGES_YAML = Path(__file__).parent.parent / "domain_knowledge" / "ranges.yaml"
 _COLLECTION_NAME = "route_sections"
 _MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
 
 _model = None
 _collection = None
-_ranges_cache: list | None = None
 
 
 def _get_model():
@@ -49,38 +47,20 @@ def _get_collection():
     return _collection
 
 
-def _load_ranges() -> list:
-    global _ranges_cache
-    if _ranges_cache is None:
-        import yaml
-        data = yaml.safe_load(_RANGES_YAML.read_text())
-        _ranges_cache = data.get("ranges", [])
-    return _ranges_cache
+def resolve_area(name: str, radius_km: float = 200.0) -> tuple[float, float, float, float] | None:
+    """Resolve a mountain range name to a bounding box via GMBA fuzzy search.
 
-
-def resolve_area(name: str) -> tuple[float, float, float, float] | None:
-    """Match a range name or alias against ranges.yaml.
-
-    Returns (lat_min, lat_max, lon_min, lon_max) for the first match, or None.
-    Tries exact match first, then substring fallback.
+    Finds the best-matching GMBA polygon, then returns a bbox of radius_km around
+    its centroid. Returns None if no match scores above 60.
     """
-    needle = name.strip().lower()
-    ranges = _load_ranges()
+    from src.mountain_ranges import search_range
+    from src.geo import bbox_around
 
-    for rng in ranges:
-        candidates = [rng["name"].lower()] + [a.lower() for a in rng.get("aliases", [])]
-        if needle in candidates:
-            b = rng["bbox"]
-            return b["lat_min"], b["lat_max"], b["lon_min"], b["lon_max"]
-
-    # Substring fallback: needle contained in a candidate, or vice-versa
-    for rng in ranges:
-        candidates = [rng["name"].lower()] + [a.lower() for a in rng.get("aliases", [])]
-        if any(needle in c or c in needle for c in candidates):
-            b = rng["bbox"]
-            return b["lat_min"], b["lat_max"], b["lon_min"], b["lon_max"]
-
-    return None
+    results = search_range(name, top_k=1)
+    if not results or results[0]["score"] < 60:
+        return None
+    r = results[0]
+    return bbox_around(r["centroid_lat"], r["centroid_lon"], radius_km)
 
 
 def is_available() -> bool:
