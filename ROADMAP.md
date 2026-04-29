@@ -36,11 +36,11 @@ Built a curated local corpus of static route beta and mountaineering reference m
 | Mémento FFCAM / UIAA (FR) | General mountaineering reference | ✅ `memento_ffcam.db` |
 
 
-### Phase 4.5 — RAG: document cards + retrieval 🔄 Next
+### Phase 4.5 — RAG: document cards + retrieval 🔄 In progress
 
 Pure embedding similarity over raw mountaineering text doesn't work well: all content is semantically similar by domain, and multilingual variation adds noise rather than signal. Approach:
 
-1. **Generate cards** — for each chunk in each DB, call Claude to produce a structured card: one-sentence summary, type (multiple at once possible) (route description, trip report, hut info, manual, other), and tags. We'll want especially: GPS coordinates if available, language, grade if available, quality if available, route name (potentially in multiple languages for routes with obvious translations e.g. "south ridge"?), DB of origin and URL, ...  Store in the existing DB tables (`summary`, `type`, `tags` columns).
+1. **Generate cards** ✅ Done — `scripts/generate_cards.py` generated structured metadata cards for all ~16,400 documents via Anthropic Batch API. Each card: `doc_type`, `date`, `trustworthiness`, `mountain_range`, `grades`, `language`, `summary`, `text_length`, `location_text`. Cards stored as columns in each source DB table.
 2. **Embed cards, not raw text** — index card summaries in ChromaDB rather than full chunk text. Summaries are more differentiated and language-normalised.
 3. **Retrieve then read** — at query time, retrieve matching cards, then pass the full chunk text to the LLM. The card acts as a routing layer.
 4. **Test** — evaluate retrieval quality on a set of representative queries before wiring into the chat loop.
