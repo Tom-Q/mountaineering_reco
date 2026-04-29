@@ -19,7 +19,7 @@
 | `text_length` | `len(text)` computed | no |
 
 **doc_type** is a JSON array — a document can have multiple types simultaneously.  
-Values: `trip_report`, `route_description`, `hut`, `reference`, `other`.
+Values: `trip_report`, `route_description`, `hut`, `manual`, `other`.
 
 **trustworthiness rules:**
 - `hikr` → `"medium"`
