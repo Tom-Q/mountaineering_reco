@@ -20,8 +20,13 @@ _CHROMA_PATH = Path(__file__).parent.parent / "data" / "chroma"
 _DB_PATH = Path(__file__).parent.parent / "data" / "summitpost.db"
 _PA_DB_PATH = Path(__file__).parent.parent / "data" / "passion_alpes.db"
 _SAC_DB_PATH = Path(__file__).parent.parent / "data" / "sac.db"
-_COLLECTION_NAME = "route_sections"
-_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+_HIKR_DB_PATH = Path(__file__).parent.parent / "data" / "hikr.db"
+_LEMKE_DB_PATH = Path(__file__).parent.parent / "data" / "lemkeclimbs.db"
+_FOTH_DB_PATH = Path(__file__).parent.parent / "data" / "freedom_of_the_hills.db"
+_FFCAM_DB_PATH = Path(__file__).parent.parent / "data" / "memento_ffcam.db"
+_REFUGES_DB_PATH = Path(__file__).parent.parent / "data" / "refuges.db"
+_COLLECTION_NAME = "cards"
+_MODEL_NAME = "all-mpnet-base-v2"
 
 _model = None
 _collection = None
@@ -76,21 +81,23 @@ def is_available() -> bool:
 def search(
     query: str,
     n_results: int = 5,
-    section_heading: str | None = None,
     source: str | None = None,
+    doc_type: str | None = None,
+    language: str | None = None,
+    min_trustworthiness: float | None = None,
     lat_min: float | None = None,
     lat_max: float | None = None,
     lon_min: float | None = None,
     lon_max: float | None = None,
 ) -> list[dict]:
-    """Semantic search over embedded route sections.
+    """Semantic search over embedded card summaries.
 
-    Returns up to n_results dicts, each containing the section text,
+    Returns up to n_results dicts, each containing the embedded text,
     similarity distance (lower = more similar), and all stored metadata
-    (route_name, sp_id, section_heading, location, difficulty, etc.).
+    (source, pk, url, title, doc_type, language, grades, mountain_range, etc.).
 
-    lat_min/lat_max/lon_min/lon_max: if provided, restrict results to routes
-    whose coordinates fall within that bounding box.
+    lat_min/lat_max/lon_min/lon_max: restrict to documents with coordinates
+    in that bounding box (documents with no coordinates are excluded).
     """
     col = _get_collection()
     model = _get_model()
@@ -98,16 +105,22 @@ def search(
     embedding = model.encode(query).tolist()
 
     conditions: list[dict] = []
-    if section_heading:
-        conditions.append({"section_heading": {"$eq": section_heading}})
     if source:
         conditions.append({"source": {"$eq": source}})
+    if doc_type:
+        conditions.append({"doc_type": {"$contains": doc_type}})
+    if language:
+        conditions.append({"language": {"$eq": language}})
+    if min_trustworthiness is not None:
+        conditions.append({"trustworthiness": {"$gte": min_trustworthiness}})
     if lat_min is not None:
         conditions.append({"lat": {"$gte": lat_min}})
+        conditions.append({"lat": {"$ne": 0.0}})
     if lat_max is not None:
         conditions.append({"lat": {"$lte": lat_max}})
     if lon_min is not None:
         conditions.append({"lon": {"$gte": lon_min}})
+        conditions.append({"lon": {"$ne": 0.0}})
     if lon_max is not None:
         conditions.append({"lon": {"$lte": lon_max}})
 
@@ -249,3 +262,123 @@ def get_route_sections(sp_id: int) -> dict:
             for s in sections
         ],
     }
+
+
+def get_hikr_report(report_id: int) -> dict:
+    """Return a hikr trip report by id."""
+    if not _HIKR_DB_PATH.exists():
+        return {}
+    conn = sqlite3.connect(_HIKR_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT id, url, title, date_of_hike, region, author, language, full_text, scraped_at "
+        "FROM reports WHERE id = ?",
+        (report_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {}
+    return {
+        "report_id": report_id,
+        "url": row["url"],
+        "title": row["title"],
+        "date_of_hike": row["date_of_hike"],
+        "region": row["region"],
+        "author": row["author"],
+        "language": row["language"],
+        "full_text": row["full_text"],
+        "scraped_at": row["scraped_at"],
+    }
+
+
+def get_lemkeclimbs_topo(topo_id: int) -> dict:
+    """Return a lemkeclimbs topo by id."""
+    if not _LEMKE_DB_PATH.exists():
+        return {}
+    conn = sqlite3.connect(_LEMKE_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT id, url, title, area, region, grade, elevation, language, full_text, scraped_at "
+        "FROM topos WHERE id = ?",
+        (topo_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {}
+    return {
+        "topo_id": topo_id,
+        "url": row["url"],
+        "title": row["title"],
+        "area": row["area"],
+        "region": row["region"],
+        "grade": row["grade"],
+        "elevation": row["elevation"],
+        "language": row["language"],
+        "full_text": row["full_text"],
+        "scraped_at": row["scraped_at"],
+    }
+
+
+def get_freedom_section(section_id: int) -> dict:
+    """Return a Freedom of the Hills section by id."""
+    if not _FOTH_DB_PATH.exists():
+        return {}
+    conn = sqlite3.connect(_FOTH_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT id, part, chapter, section, text, char_count FROM sections WHERE id = ?",
+        (section_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {}
+    return {
+        "section_id": section_id,
+        "part": row["part"],
+        "chapter": row["chapter"],
+        "section": row["section"],
+        "text": row["text"],
+        "char_count": row["char_count"],
+    }
+
+
+def get_memento_section(section_id: int) -> dict:
+    """Return a Mémento FFCAM section by id."""
+    if not _FFCAM_DB_PATH.exists():
+        return {}
+    conn = sqlite3.connect(_FFCAM_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT id, major_section, chapter, section, text, char_count FROM sections WHERE id = ?",
+        (section_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {}
+    return {
+        "section_id": section_id,
+        "major_section": row["major_section"],
+        "chapter": row["chapter"],
+        "section": row["section"],
+        "text": row["text"],
+        "char_count": row["char_count"],
+    }
+
+
+def get_refuge(refuge_id: int) -> dict:
+    """Return a hut record from refuges.db by id."""
+    if not _REFUGES_DB_PATH.exists():
+        return {}
+    conn = sqlite3.connect(_REFUGES_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        """SELECT id, name, type, lat, lon, altitude_m, capacity, status, url,
+                  opening_dates, contact, phone, phone_custodian, website_url,
+                  price_eur, meteoblue_url, access_desc, description
+           FROM huts WHERE id = ?""",
+        (refuge_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {}
+    return {k: row[k] for k in row.keys()}

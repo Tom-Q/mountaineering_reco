@@ -309,18 +309,18 @@ SHOW_IMAGES_TOOL: dict = {
 SEARCH_DOCUMENTS_TOOL: dict = {
     "name": "search_documents",
     "description": (
-        "Search the local route database (SummitPost + passion-alpes.com topos) for route "
-        "descriptions, approach notes, gear lists, and other static beta. "
-        "Use for factual route information (what the route is like, gear needed, approach). "
-        "Works in any language — a French query will match English, French, German, and Italian content. "
-        "Not for conditions or weather — use get_outing_detail and get_weather_forecast for those. "
-        "Returns the most semantically relevant section chunks.\n\n"
+        "Search the local mountaineering document corpus (~16,400 documents across 8 sources: "
+        "SummitPost, hikr.org, SAC, passion-alpes, lemkeclimbs, refuges.info, Freedom of the Hills, "
+        "Mémento FFCAM) for route descriptions, trip reports, hut info, and reference material. "
+        "Use for factual route beta (approach, gear, grades), trip reports, hut access, and technique guides. "
+        "Queries can be in any language. "
+        "Not for conditions or weather — use get_outing_detail and get_weather_forecast for those.\n\n"
         "Geographic filtering — use at most one of:\n"
-        "  area: a named mountain range (e.g. 'Mont Blanc massif', 'Karakoram', 'Patagonia', "
-        "'Sierra Nevada', 'Japanese Alps'). Resolves to a bounding box from the ranges database.\n"
+        "  area: a named mountain range (e.g. 'Mont Blanc massif', 'Karakoram', 'Patagonia'). "
+        "Resolves to a bounding box from the ranges database.\n"
         "  near: a place name (peak, village, hut, pass). Geocoded via Nominatim; combine with "
         "radius_km to set the search radius (default 50 km).\n\n"
-        "To retrieve all sections for a specific route by ID, use retrieve_document instead."
+        "To retrieve the full text of a specific document, use retrieve_document."
     ),
     "input_schema": {
         "type": "object",
@@ -331,15 +331,18 @@ SEARCH_DOCUMENTS_TOOL: dict = {
             },
             "n_results": {
                 "type": "integer",
-                "description": "Number of section chunks to return (default 5, max 15).",
+                "description": "Number of results to return (default 5, max 15).",
             },
-            "section_heading": {
+            "doc_type": {
                 "type": "string",
                 "description": (
-                    "Optional: restrict to a specific section type. "
-                    "Common values: Overview, Approach, Route Description, "
-                    "Essential Gear, Getting There, Descent, Red Tape."
+                    "Optional: filter by document type. "
+                    "Values: route_description, personal_trip_report, hut, manual, other."
                 ),
+            },
+            "language": {
+                "type": "string",
+                "description": "Optional: filter by language ISO code (en, fr, de, it, …).",
             },
             "area": {
                 "type": "string",
@@ -370,27 +373,27 @@ SEARCH_DOCUMENTS_TOOL: dict = {
 RETRIEVE_DOCUMENT_TOOL: dict = {
     "name": "retrieve_document",
     "description": (
-        "Retrieve the full record for a specific route from the local database. "
-        "Use this for a deep-dive on one route once you have its ID from search_documents results. "
-        "Pass sp_id for SummitPost routes, topo_id for passion-alpes routes, or sac_id for SAC routes. "
-        "Returns the full route metadata, all sections, and image URLs."
+        "Fetch the full text of a document found via search_documents. "
+        "Use the source and pk values from search results. "
+        "Read the card summary first and only retrieve documents whose summary suggests "
+        "directly relevant route beta, conditions, or reference material."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "sp_id": {
-                "type": "integer",
-                "description": "SummitPost numeric route ID (from search_documents metadata).",
+            "source": {
+                "type": "string",
+                "description": (
+                    "Source name from search results: summitpost, hikr, sac, "
+                    "passion_alpes, lemkeclimbs, freedom_of_hills, memento_ffcam, refuges."
+                ),
             },
-            "topo_id": {
+            "pk": {
                 "type": "integer",
-                "description": "passion-alpes topo ID (from search_documents metadata).",
-            },
-            "sac_id": {
-                "type": "integer",
-                "description": "SAC route ID (from search_documents metadata, source='sac').",
+                "description": "Primary key from search results (the pk field).",
             },
         },
+        "required": ["source", "pk"],
     },
 }
 
@@ -661,7 +664,8 @@ def _handle_search_documents(tool_input: dict) -> dict:
 
     query = tool_input["query"]
     n_results = min(int(tool_input.get("n_results") or 5), 15)
-    section_heading = tool_input.get("section_heading")
+    doc_type = tool_input.get("doc_type")
+    language = tool_input.get("language")
     area = tool_input.get("area")
     near = tool_input.get("near")
     radius_km = float(tool_input.get("radius_km") or 50)
@@ -690,7 +694,8 @@ def _handle_search_documents(tool_input: dict) -> dict:
     results = search(
         query,
         n_results=n_results,
-        section_heading=section_heading,
+        doc_type=doc_type,
+        language=language,
         lat_min=lat_min,
         lat_max=lat_max,
         lon_min=lon_min,
@@ -704,32 +709,38 @@ def _handle_search_documents(tool_input: dict) -> dict:
 
 
 def _handle_retrieve_document(tool_input: dict) -> dict:
-    from src.rag import get_passion_alpes_topo, get_route_sections, get_sac_topo, is_available
+    from src.rag import (
+        get_freedom_section, get_hikr_report, get_lemkeclimbs_topo,
+        get_memento_section, get_passion_alpes_topo, get_refuge,
+        get_route_sections, get_sac_topo, is_available,
+    )
     if not is_available():
         return {"available": False, "note": "Route database not indexed yet."}
 
-    if "topo_id" in tool_input and tool_input["topo_id"] is not None:
-        topo_id = int(tool_input["topo_id"])
-        topo = get_passion_alpes_topo(topo_id)
-        if not topo:
-            return {"available": True, "found": False, "topo_id": topo_id}
-        return {"available": True, "found": True, "source": "passion_alpes", "topo": topo}
+    source = tool_input.get("source")
+    pk = tool_input.get("pk")
+    if not source or pk is None:
+        return {"available": True, "found": False, "note": "Provide source and pk from search results."}
 
-    if "sp_id" in tool_input and tool_input["sp_id"] is not None:
-        sp_id = int(tool_input["sp_id"])
-        route = get_route_sections(sp_id)
-        if not route:
-            return {"available": True, "found": False, "sp_id": sp_id}
-        return {"available": True, "found": True, "source": "summitpost", "route": route}
+    pk = int(pk)
+    dispatch = {
+        "summitpost":      get_route_sections,
+        "passion_alpes":   get_passion_alpes_topo,
+        "sac":             get_sac_topo,
+        "hikr":            get_hikr_report,
+        "lemkeclimbs":     get_lemkeclimbs_topo,
+        "freedom_of_hills": get_freedom_section,
+        "memento_ffcam":   get_memento_section,
+        "refuges":         get_refuge,
+    }
+    fn = dispatch.get(source)
+    if fn is None:
+        return {"available": True, "found": False, "note": f"Unknown source '{source}'."}
 
-    if "sac_id" in tool_input and tool_input["sac_id"] is not None:
-        sac_id = int(tool_input["sac_id"])
-        topo = get_sac_topo(sac_id)
-        if not topo:
-            return {"available": True, "found": False, "sac_id": sac_id}
-        return {"available": True, "found": True, "source": "sac", "topo": topo}
-
-    return {"available": True, "found": False, "note": "Provide sp_id, topo_id, or sac_id."}
+    document = fn(pk)
+    if not document:
+        return {"available": True, "found": False, "source": source, "pk": pk}
+    return {"available": True, "found": True, "source": source, "document": document}
 
 
 def _handle_show_images(tool_input: dict) -> dict:
