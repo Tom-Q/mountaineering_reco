@@ -158,21 +158,19 @@ def get_passion_alpes_topo(topo_id: int) -> dict:
     """
     if not _PA_DB_PATH.exists():
         return {}
-    conn = sqlite3.connect(_PA_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    topo = conn.execute(
-        "SELECT id, url, title, category, region, grade, departure, timing, full_text, scraped_at "
-        "FROM topos WHERE id = ?",
-        (topo_id,),
-    ).fetchone()
-    if not topo:
-        conn.close()
-        return {}
-    images = conn.execute(
-        "SELECT image_url, caption, is_diagram FROM topo_images WHERE topo_id = ?",
-        (topo_id,),
-    ).fetchall()
-    conn.close()
+    with sqlite3.connect(_PA_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        topo = conn.execute(
+            "SELECT id, url, title, category, region, grade, departure, timing, full_text, scraped_at "
+            "FROM topos WHERE id = ?",
+            (topo_id,),
+        ).fetchone()
+        if not topo:
+            return {}
+        images = conn.execute(
+            "SELECT image_url, caption, is_diagram FROM topo_images WHERE topo_id = ?",
+            (topo_id,),
+        ).fetchall()
     return {
         "topo_id": topo_id,
         "url": topo["url"],
@@ -195,22 +193,20 @@ def get_sac_topo(route_id: int) -> dict:
     """Return the full route record from sac.db (deep-dive expansion)."""
     if not _SAC_DB_PATH.exists():
         return {}
-    conn = sqlite3.connect(_SAC_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    topo = conn.execute(
-        """SELECT id, summit_id, url, title, category, region, grade,
-                  timing, altitude, latitude, longitude, full_text, scraped_at
-           FROM topos WHERE id = ?""",
-        (route_id,),
-    ).fetchone()
-    if not topo:
-        conn.close()
-        return {}
-    images = conn.execute(
-        "SELECT image_url, caption FROM topo_images WHERE topo_id = ?",
-        (route_id,),
-    ).fetchall()
-    conn.close()
+    with sqlite3.connect(_SAC_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        topo = conn.execute(
+            """SELECT id, summit_id, url, title, category, region, grade,
+                      timing, altitude, latitude, longitude, full_text, scraped_at
+               FROM topos WHERE id = ?""",
+            (route_id,),
+        ).fetchone()
+        if not topo:
+            return {}
+        images = conn.execute(
+            "SELECT image_url, caption FROM topo_images WHERE topo_id = ?",
+            (route_id,),
+        ).fetchall()
     return {
         "route_id": route_id,
         "url": topo["url"],
@@ -235,20 +231,18 @@ def get_route_sections(sp_id: int) -> dict:
     """
     if not _DB_PATH.exists():
         return {}
-    conn = sqlite3.connect(_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    route = conn.execute(
-        "SELECT name, url, difficulty, location, lat, lon FROM routes WHERE sp_id = ?",
-        (sp_id,),
-    ).fetchone()
-    if not route:
-        conn.close()
-        return {}
-    sections = conn.execute(
-        "SELECT heading, body, position FROM sections WHERE route_id = ? ORDER BY position",
-        (sp_id,),
-    ).fetchall()
-    conn.close()
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        route = conn.execute(
+            "SELECT name, url, difficulty, location, lat, lon FROM routes WHERE sp_id = ?",
+            (sp_id,),
+        ).fetchone()
+        if not route:
+            return {}
+        sections = conn.execute(
+            "SELECT heading, body, position FROM sections WHERE route_id = ? ORDER BY position",
+            (sp_id,),
+        ).fetchall()
     return {
         "sp_id": sp_id,
         "name": route["name"],
@@ -268,14 +262,13 @@ def get_hikr_report(report_id: int) -> dict:
     """Return a hikr trip report by id."""
     if not _HIKR_DB_PATH.exists():
         return {}
-    conn = sqlite3.connect(_HIKR_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT id, url, title, date_of_hike, region, author, language, full_text, scraped_at "
-        "FROM reports WHERE id = ?",
-        (report_id,),
-    ).fetchone()
-    conn.close()
+    with sqlite3.connect(_HIKR_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT id, url, title, date_of_hike, region, author, language, full_text, scraped_at "
+            "FROM reports WHERE id = ?",
+            (report_id,),
+        ).fetchone()
     if not row:
         return {}
     return {
@@ -295,14 +288,13 @@ def get_lemkeclimbs_topo(topo_id: int) -> dict:
     """Return a lemkeclimbs topo by id."""
     if not _LEMKE_DB_PATH.exists():
         return {}
-    conn = sqlite3.connect(_LEMKE_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT id, url, title, area, region, grade, elevation, language, full_text, scraped_at "
-        "FROM topos WHERE id = ?",
-        (topo_id,),
-    ).fetchone()
-    conn.close()
+    with sqlite3.connect(_LEMKE_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT id, url, title, area, region, grade, elevation, language, full_text, scraped_at "
+            "FROM topos WHERE id = ?",
+            (topo_id,),
+        ).fetchone()
     if not row:
         return {}
     return {
@@ -323,13 +315,12 @@ def get_freedom_section(section_id: int) -> dict:
     """Return a Freedom of the Hills section by id."""
     if not _FOTH_DB_PATH.exists():
         return {}
-    conn = sqlite3.connect(_FOTH_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT id, part, chapter, section, text, char_count FROM sections WHERE id = ?",
-        (section_id,),
-    ).fetchone()
-    conn.close()
+    with sqlite3.connect(_FOTH_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT id, part, chapter, section, text, char_count FROM sections WHERE id = ?",
+            (section_id,),
+        ).fetchone()
     if not row:
         return {}
     return {
@@ -346,13 +337,12 @@ def get_memento_section(section_id: int) -> dict:
     """Return a Mémento FFCAM section by id."""
     if not _FFCAM_DB_PATH.exists():
         return {}
-    conn = sqlite3.connect(_FFCAM_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT id, major_section, chapter, section, text, char_count FROM sections WHERE id = ?",
-        (section_id,),
-    ).fetchone()
-    conn.close()
+    with sqlite3.connect(_FFCAM_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT id, major_section, chapter, section, text, char_count FROM sections WHERE id = ?",
+            (section_id,),
+        ).fetchone()
     if not row:
         return {}
     return {
@@ -369,16 +359,15 @@ def get_refuge(refuge_id: int) -> dict:
     """Return a hut record from refuges.db by id."""
     if not _REFUGES_DB_PATH.exists():
         return {}
-    conn = sqlite3.connect(_REFUGES_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        """SELECT id, name, type, lat, lon, altitude_m, capacity, status, url,
-                  opening_dates, contact, phone, phone_custodian, website_url,
-                  price_eur, meteoblue_url, access_desc, description
-           FROM huts WHERE id = ?""",
-        (refuge_id,),
-    ).fetchone()
-    conn.close()
+    with sqlite3.connect(_REFUGES_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """SELECT id, name, type, lat, lon, altitude_m, capacity, status, url,
+                      opening_dates, contact, phone, phone_custodian, website_url,
+                      price_eur, meteoblue_url, access_desc, description
+               FROM huts WHERE id = ?""",
+            (refuge_id,),
+        ).fetchone()
     if not row:
         return {}
     return {k: row[k] for k in row.keys()}

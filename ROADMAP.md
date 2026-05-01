@@ -6,17 +6,9 @@
 
 ### Phase 2 — Chat tab ✅ Done
 
-### Phase 3 — Hut data
-Build a local hut database to eliminate per-request API calls for static hut info.
+### Phase 3 — Hut data ✅ Done
 
-**Sources:**
-- **refuges.info API** — worldwide huts (not just France). Free, no auth, GeoJSON, full detail. Covers refuges, unmanned cabanes, and bivouacs globally. Endpoint: `/api/massif/<id>?detail=full`. Collection script: `scripts/collect_refuges.py` → `data/refuges.db`.
-- **SAC / DAV / CAI hut finders** — secondary sources for richer metadata only (guardian contacts, booking, prices) where refuges.info data is thin. Not needed for basic hut location coverage.
-- **Camptocamp hut pages** — cross-reference; useful for meteoblue links, route lists, guardian contacts
-
-**Data to cache per hut:** coordinates, altitude, capacity, opening dates, guardian contact, access description, price, linked routes, meteoblue URL.
-
-**Storage:** local SQLite or JSON; refresh on a schedule (weekly/monthly for operational data, rarely for static).
+Built local hut database from refuges.info API. 4,820 huts in `refuges.db`; 1,199 (all guarded refuges + gîtes d'étape + summarised huts) indexed in ChromaDB and searchable via RAG. Metadata per hut: coordinates, altitude, capacity, opening dates, guardian contact, access description, price, meteoblue URL.
 
 ### Phase 4 — Topo scraping ✅ Done
 
@@ -36,16 +28,23 @@ Built a curated local corpus of static route beta and mountaineering reference m
 | Mémento FFCAM / UIAA (FR) | General mountaineering reference | ✅ `memento_ffcam.db` |
 
 
-### Phase 4.5 — RAG: document cards + retrieval 🔄 In progress
+### Phase 4.5 — RAG: document cards + retrieval ✅ Done
 
-Pure embedding similarity over raw mountaineering text doesn't work well: all content is semantically similar by domain, and multilingual variation adds noise rather than signal. Approach:
+1. **Generate cards** ✅ — `scripts/generate_cards.py` generated structured metadata cards for all ~17,000 documents via Anthropic Batch API. Each card: `doc_type`, `date`, `trustworthiness`, `mountain_range`, `grades`, `language`, `summary`. Cards stored as columns in each source DB table.
+2. **Embed cards** ✅ — `scripts/build_index.py` builds ChromaDB `cards` collection from all 8 source DBs. 17,043 documents indexed. `doc_type` stored as native array for `$contains` filtering.
+3. **Retrieve then read** ✅ — `search_and_extract` tool: search → Haiku routing → parallel Haiku extraction. Full document text never enters main conversation context. `retrieve_document` available for raw access.
+4. **Test** — retrieval quality not formally evaluated yet.
 
-1. **Generate cards** ✅ Done — `scripts/generate_cards.py` generated structured metadata cards for all ~16,400 documents via Anthropic Batch API. Each card: `doc_type`, `date`, `trustworthiness`, `mountain_range`, `grades`, `language`, `summary`, `text_length`, `location_text`. Cards stored as columns in each source DB table.
-2. **Embed cards, not raw text** — index card summaries in ChromaDB rather than full chunk text. Summaries are more differentiated and language-normalised.
-3. **Retrieve then read** — at query time, retrieve matching cards, then pass the full chunk text to the LLM. The card acts as a routing layer.
-4. **Test** — evaluate retrieval quality on a set of representative queries before wiring into the chat loop.
+**Stack:** ChromaDB (local), `all-mpnet-base-v2` embeddings, Claude Haiku for card generation and in-context extraction.
 
-**Stack:** ChromaDB (local), `paraphrase-multilingual-mpnet-base-v2` embeddings, Claude Haiku for card generation.
+### Phase 4.6 — API cost optimisation ✅ Done
+
+Single query was costing ~$0.35 due to O(n²) context growth with serial tool calls.
+
+- **Prompt caching** — system prompt + progressive conversation caching. Each loop iteration marks the last message cacheable; subsequent calls only pay for the delta. Cache reads cost 10% of normal input price.
+- **Parallel tool calls** — system prompt instructs LLM to batch independent calls in one response. UI shows ⚡ prefix for parallel tool invocations.
+- **`search_and_extract`** — replaces `search_documents` + `retrieve_document` for normal RAG use. One tool call: search → Haiku routing on summaries → parallel Haiku extraction. Full document text never enters main context.
+- **`fetch_route_full`** — replaces the serial C2C chain (search → fetch → outing list → outing details). One tool call: search → Haiku route selection → fetch topo → Haiku outing selection → parallel Haiku extraction.
 
 ### Phase 5 — UI and prompting improvements
 
@@ -112,8 +111,8 @@ for s in sorted(stubs, key=lambda x: x.get("date_start") or "", reverse=True):
     date_lines.append(f"- {d}  ({age})  rating: {r}")
 ```
 
-### Multi-agent parallelism
-Dispatch separate fetch agents simultaneously (one per data source), each returning a strict JSON contract, then merge results. Reduces latency and keeps concerns separated.
+### Multi-agent parallelism ✅ Partially addressed
+Parallel tool call instruction added to system prompt. `search_and_extract` and `fetch_route_full` both use `ThreadPoolExecutor` for parallel Haiku sub-calls internally. Full multi-agent dispatch (separate agents per data source) not implemented.
 
 ### Report template overhaul
 Current route analysis output is unstructured. Adopt a proper report template with consistent sections:

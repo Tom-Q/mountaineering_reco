@@ -19,9 +19,12 @@ Usage:
 
 from __future__ import annotations
 
+import json as _json
 import re
 from datetime import date
 from typing import Any
+
+_HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
 from src.avalanche import fetch_avalanche_bulletin
 from src.camptocamp import (
@@ -904,11 +907,14 @@ def _handle_get_avalanche_bulletin(tool_input: dict) -> dict:
 # fetch_route_full helpers
 # ---------------------------------------------------------------------------
 
+def _parse_haiku_json(response) -> Any:
+    return _json.loads(response.content[0].text)
+
+
 def _select_routes(route_stubs: list[dict], goal: str) -> tuple[list[int], bool]:
     """Haiku call to select which C2C routes match the goal.
     Returns (list of route_ids, ambiguous). ambiguous=True when multiple
     plausible routes with different characteristics are found."""
-    import json as _json
     from src.client import _get_client
     lines = "\n".join(
         f"[{i}] id={r.get('document_id')} title={r.get('title_prefix','')} {r.get('title','')} "
@@ -916,7 +922,7 @@ def _select_routes(route_stubs: list[dict], goal: str) -> tuple[list[int], bool]
         for i, r in enumerate(route_stubs[:10])
     )
     response = _get_client().messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=_HAIKU_MODEL,
         max_tokens=200,
         system=(
             'Select routes that match the goal. Return JSON: {"indices": [0,1,...], "ambiguous": false}. '
@@ -926,7 +932,7 @@ def _select_routes(route_stubs: list[dict], goal: str) -> tuple[list[int], bool]
         messages=[{"role": "user", "content": f"Goal: {goal}\n\nRoutes:\n{lines}"}],
     )
     try:
-        parsed = _json.loads(response.content[0].text)
+        parsed = _parse_haiku_json(response)
         indices = parsed.get("indices", [])[:2]
         ambiguous = bool(parsed.get("ambiguous", False))
         ids = [route_stubs[i]["document_id"] for i in indices if 0 <= i < len(route_stubs)]
@@ -937,7 +943,6 @@ def _select_routes(route_stubs: list[dict], goal: str) -> tuple[list[int], bool]
 
 def _select_outings(outing_stubs: list[dict], goal: str) -> list[int]:
     """Haiku call to pick which outing stubs are worth reading in full."""
-    import json as _json
     from src.client import _get_client
     lines = "\n".join(
         f"[{i}] id={s.get('document_id')} date={s.get('date_start','')} "
@@ -945,7 +950,7 @@ def _select_outings(outing_stubs: list[dict], goal: str) -> list[int]:
         for i, s in enumerate(outing_stubs[:20])
     )
     response = _get_client().messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=_HAIKU_MODEL,
         max_tokens=100,
         system=(
             "Pick the most relevant outings (max 3). Prefer recent and highly rated. "
@@ -954,7 +959,7 @@ def _select_outings(outing_stubs: list[dict], goal: str) -> list[int]:
         messages=[{"role": "user", "content": f"Goal: {goal}\n\nOutings:\n{lines}"}],
     )
     try:
-        indices = _json.loads(response.content[0].text)
+        indices = _parse_haiku_json(response)
         return [outing_stubs[i]["document_id"] for i in indices if 0 <= i < len(outing_stubs)]
     except (ValueError, KeyError, IndexError):
         return [s["document_id"] for s in outing_stubs[:2]]
@@ -1075,7 +1080,7 @@ def _get_document_text(source: str, document: dict) -> str:
 def _extract_from_document(text: str, goal: str) -> str:
     from src.client import _get_client
     response = _get_client().messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=_HAIKU_MODEL,
         max_tokens=600,
         system=(
             "Extract information relevant to the goal from the document. "
@@ -1087,14 +1092,13 @@ def _extract_from_document(text: str, goal: str) -> str:
 
 
 def _select_documents(summaries: list[dict], goal: str) -> set[tuple[str, int]]:
-    import json as _json
     from src.client import _get_client
     summary_lines = "\n".join(
         f"[{i}] {r['source']}--{r['pk']}: {r.get('title', '')} | {(r.get('summary') or '')[:200]}"
         for i, r in enumerate(summaries)
     )
     response = _get_client().messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=_HAIKU_MODEL,
         max_tokens=200,
         system=(
             "Select which documents are worth reading in full to answer the goal. "
@@ -1106,7 +1110,7 @@ def _select_documents(summaries: list[dict], goal: str) -> set[tuple[str, int]]:
         }],
     )
     try:
-        indices = _json.loads(response.content[0].text)
+        indices = _parse_haiku_json(response)
         return {(summaries[i]["source"], summaries[i]["pk"]) for i in indices if 0 <= i < len(summaries)}
     except (ValueError, KeyError, IndexError):
         return {(r["source"], r["pk"]) for r in sorted(summaries, key=lambda x: x["distance"])[:2]}
@@ -1182,17 +1186,17 @@ def _handle_search_and_extract(tool_input: dict) -> dict:
         "refuges":          get_refuge,
     }
 
-    def fetch_and_extract(summary: dict) -> dict | None:
+    def fetch_and_extract(summary: dict) -> dict:
         source, pk = summary["source"], summary["pk"]
         fn = dispatch.get(source)
         if not fn:
-            return None
+            return {"source": source, "pk": pk, "title": "", "url": "", "extraction": f"[source '{source}' not supported]"}
         document = fn(pk)
         if not document:
-            return None
+            return {"source": source, "pk": pk, "title": "", "url": "", "extraction": "[document not found in database]"}
         text = _get_document_text(source, document)
         if not text:
-            return None
+            return {"source": source, "pk": pk, "title": document.get("title", ""), "url": document.get("url", ""), "extraction": "[document has no text]"}
         extraction = _extract_from_document(text, goal)
         return {
             "source": source,
@@ -1207,9 +1211,7 @@ def _handle_search_and_extract(tool_input: dict) -> dict:
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         futures = {executor.submit(fetch_and_extract, s): s for s in to_fetch}
         for future in concurrent.futures.as_completed(futures):
-            result = future.result()
-            if result:
-                extractions.append(result)
+            extractions.append(future.result())
 
     out = {"available": True, "summaries": all_summaries, "extractions": extractions}
     if geo_note:
