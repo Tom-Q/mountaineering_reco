@@ -95,21 +95,8 @@ if parsed["verdict"] == "revise" and parsed["revised_output"]:
     analysis = parsed["revised_output"]
 ```
 
-### Seasonality from outing date distribution
-`src/route_analysis.py` (now deleted) built a date-distribution block from all Camptocamp
-outing stubs (not just the selected full reports), formatted as a dated list with age labels
-and condition ratings. This gives the LLM a long-range view of when the route is typically
-attempted and in what condition — useful for seasonality assessment independent of recent
-conditions. If a structured analysis mode is revived, include this block:
-
-```python
-date_lines = [f"## All trip report dates ({len(stubs)} total, today is {today})"]
-for s in sorted(stubs, key=lambda x: x.get("date_start") or "", reverse=True):
-    d = s.get("date_start") or "?"
-    r = s.get("condition_rating") or "—"
-    age = _age_label(d)
-    date_lines.append(f"- {d}  ({age})  rating: {r}")
-```
+### Seasonality from outing date distribution ✅ Done
+`_format_seasonality` in `src/tools.py` builds a month histogram from all outing stubs (up to 200, fetched as part of `fetch_route_full`). Shows trip count per month with condition rating breakdown (g/f/p/?). `fetch_outing_stubs` limit raised from 20 to 200; selection still uses only the top 20.
 
 ### Multi-agent parallelism ✅ Partially addressed
 Parallel tool call instruction added to system prompt. `search_and_extract` and `fetch_route_full` both use `ThreadPoolExecutor` for parallel Haiku sub-calls internally. Full multi-agent dispatch (separate agents per data source) not implemented.

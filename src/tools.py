@@ -977,10 +977,43 @@ def _summarise_route(route: dict) -> dict:
         "url": f"https://www.camptocamp.org/routes/{route.get('document_id')}",
         "global_rating": route.get("global_rating"),
         "elevation_max": route.get("elevation_max"),
-        "description": loc.get("description", "")[:1500],
-        "approach": loc.get("approach", "")[:800],
-        "gear": loc.get("gear", "")[:400],
+        "description": (loc.get("description") or "")[:1500],
+        "approach": (loc.get("approach") or "")[:800],
+        "gear": (loc.get("gear") or "")[:400],
     }
+
+
+def _format_seasonality(stubs: list[dict], today: date) -> str:
+    """Month histogram of outing dates with condition rating breakdown."""
+    from collections import defaultdict
+    by_month: dict[int, list[str]] = defaultdict(list)
+    years: set[str] = set()
+    for s in stubs:
+        d = s.get("date_start") or ""
+        if len(d) >= 7:
+            try:
+                month = int(d[5:7])
+                by_month[month].append(s.get("condition_rating") or "n/r")
+                years.add(d[:4])
+            except ValueError:
+                pass
+    if not by_month:
+        return ""
+    year_range = f"{min(years)}–{max(years)}" if years else ""
+    max_count = max(len(v) for v in by_month.values())
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    lines = [f"Seasonality ({len(stubs)} trips{', ' + year_range if year_range else ''}):"]
+    for m in range(1, 13):
+        ratings = by_month.get(m, [])
+        n = len(ratings)
+        bar = ("█" * max(1, round(n * 16 / max_count))) if n else ""
+        good = ratings.count("good")
+        fair = ratings.count("fair")
+        poor = ratings.count("poor")
+        nr   = n - good - fair - poor
+        parts = [f"{v}{k}" for v, k in [(good, "g"), (fair, "f"), (poor, "p"), (nr, "?")] if v]
+        lines.append(f"  {month_names[m-1]:3}  {bar:<16}  {n:>3}  {' '.join(parts)}")
+    return "\n".join(lines)
 
 
 def _handle_fetch_route_full(tool_input: dict) -> dict:
@@ -1015,8 +1048,9 @@ def _handle_fetch_route_full(tool_input: dict) -> dict:
     results = []
     for route in routes:
         rid = route["document_id"]
-        outing_stubs = fetch_outing_stubs(rid, limit=20)
-        outing_ids = _select_outings(outing_stubs, goal) if outing_stubs else []
+        outing_stubs = fetch_outing_stubs(rid, limit=200)
+        seasonality = _format_seasonality(outing_stubs, date.today())
+        outing_ids = _select_outings(outing_stubs[:20], goal) if outing_stubs else []
 
         # 5. Fetch full outings (sequential — C2C rate limited)
         full_outings = [fetch_outing_full(oid) for oid in outing_ids]
@@ -1046,6 +1080,7 @@ def _handle_fetch_route_full(tool_input: dict) -> dict:
 
         results.append({
             "route": _summarise_route(route),
+            "seasonality": seasonality,
             "outing_extractions": outing_extractions,
         })
 
