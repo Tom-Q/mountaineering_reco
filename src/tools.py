@@ -44,11 +44,13 @@ from src.weather import fetch_weather_for_coords, route_coords
 WEATHER_TOOL: dict = {
     "name": "get_weather_forecast",
     "description": (
-        "Fetch a 7-day weather forecast and a snowfall history for a location. "
+        "Fetch a 7-day weather forecast, snowfall history, and daylight times for a location. "
         "Returns daily snowfall, wind speed, wind gusts, 0°C isotherm (refreeze and melt), "
         "night cloud cover, and min/max temperature. "
         "Snowfall history includes recent loading events (past 15 days) and, when in-season, "
         "total accumulation since the season start — windows are range-aware. "
+        "Also returns civil dawn, sunrise, sunset, and civil dusk for each forecast day "
+        "in local time — useful for alpine start planning. "
         "Use this to assess whether a route is in safe condition weather-wise."
     ),
     "input_schema": {
@@ -520,6 +522,7 @@ def _handle_get_weather_forecast(tool_input: dict) -> dict:
         "elevation_m": elevation_m,
         "forecast_text": summary.forecast_text,
         "historical_summary": summary.historical_text,
+        "daylight": summary.daylight_text,
         "errors": summary.fetch_errors,
     }
 

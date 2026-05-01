@@ -38,6 +38,7 @@ class WeatherSummary:
     forecast_text: str         # pre-formatted for LLM injection
     historical_text: str       # snowfall history (recent + seasonal) for LLM injection
     ui_table: str              # markdown table for display in the app
+    daylight_text: str = ""    # sunrise/sunset/dawn/dusk for LLM injection
     fetch_errors: list[str] = field(default_factory=list)
 
 
@@ -336,6 +337,55 @@ def _format_forecast_text(days: list[_DayForecast]) -> str:
     return "\n".join(lines)
 
 
+def _compute_daylight_text(lat: float, lon: float, dates: list[str]) -> str:
+    """Compute civil dawn/sunrise/sunset/dusk for each date at the given coordinates.
+
+    Times are returned in local time (timezone resolved from coordinates).
+    Handles polar day/night gracefully.
+    """
+    from astral import LocationInfo
+    from astral.sun import sun
+    from zoneinfo import ZoneInfo
+    try:
+        from timezonefinder import TimezoneFinder
+        tz_name = TimezoneFinder().timezone_at(lat=lat, lng=lon) or "UTC"
+    except Exception:
+        tz_name = "UTC"
+
+    tz = ZoneInfo(tz_name)
+    observer = LocationInfo(latitude=lat, longitude=lon).observer
+
+    # Compute UTC offset label for the header (use first date)
+    try:
+        import datetime as _dt
+        sample_dt = _dt.datetime(2000, 6, 21, 12, tzinfo=tz)
+        offset_h = int(sample_dt.utcoffset().total_seconds() // 3600)
+        offset_label = f"UTC{offset_h:+d}"
+    except Exception:
+        offset_label = ""
+
+    lines = [f"Daylight ({tz_name}, {offset_label}):"]
+    for date_str in dates:
+        d = date.fromisoformat(date_str)
+        try:
+            s = sun(observer, date=d, tzinfo=tz)
+            dawn_s    = s["dawn"].strftime("%H:%M")
+            sunrise_s = s["sunrise"].strftime("%H:%M")
+            sunset_s  = s["sunset"].strftime("%H:%M")
+            dusk_s    = s["dusk"].strftime("%H:%M")
+            daylight_secs = (s["sunset"] - s["sunrise"]).total_seconds()
+            daylight_h = int(daylight_secs // 3600)
+            daylight_m = int((daylight_secs % 3600) // 60)
+            lines.append(
+                f"{date_str}  dawn {dawn_s}  sunrise {sunrise_s}  "
+                f"sunset {sunset_s}  dusk {dusk_s}  ({daylight_h}h {daylight_m:02d}m)"
+            )
+        except Exception:
+            lines.append(f"{date_str}  polar day or night — no standard dawn/dusk")
+
+    return "\n".join(lines)
+
+
 def _isotherm_above(isotherm: str, elevation_m: int | None) -> bool:
     """Return True if the given isotherm altitude is above elevation_m."""
     if elevation_m is None or isotherm in ("n/a", ""):
@@ -563,6 +613,14 @@ def fetch_weather_for_coords(
     except Exception as e:
         errors.append(f"Snowfall data unavailable: {e}")
 
+    daylight_text = ""
+    try:
+        forecast_dates = [d.date for d in forecast_days] if forecast_days else []
+        if forecast_dates:
+            daylight_text = _compute_daylight_text(lat, lon, forecast_dates)
+    except Exception as e:
+        errors.append(f"Daylight calculation unavailable: {e}")
+
     today_str = today.isoformat()
     return WeatherSummary(
         fetch_date=today_str,
@@ -570,6 +628,7 @@ def fetch_weather_for_coords(
         forecast_text=_format_forecast_text(forecast_days) if forecast_days else "",
         historical_text=historical_text,
         ui_table=_format_ui_table(hist_days, forecast_days, today_str, elevation_m),
+        daylight_text=daylight_text,
         fetch_errors=errors,
     )
 

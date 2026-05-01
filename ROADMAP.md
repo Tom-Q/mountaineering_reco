@@ -125,9 +125,8 @@ Notes:
 - "Information Gaps" section must be explicit and always present (even if empty)
 - Reference: dreamiurg report template and Mount Shuksan example output
 
-### Daylight calculation
-Add sunrise/sunset/civil twilight for the route's coordinates and planned date. Useful for alpine start planning.
-Use the `astral` Python library (pure Python, no API key). Already used by dreamiurg.
+### Daylight calculation ✅ Done
+`_compute_daylight_text` in `src/weather.py` uses `astral` + `timezonefinder` to compute civil dawn, sunrise, sunset, and civil dusk in local time for all 7 forecast days. Injected into the weather tool result as `daylight` field.
 
 ### Weather: multiple elevation bands
 Consider fetching weather at multiple elevation bands (trailhead, mid-route, summit) for routes with large altitude gain. High-altitude wind and temperature can differ significantly from the base — relevant for routes with >1000m of elevation difference. The weather tool currently accepts a single `elevation_m`; extending it to accept a list of elevations and return one forecast per band would cover this.
