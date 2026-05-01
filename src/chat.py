@@ -52,6 +52,21 @@ def _format_profile(user_params: dict) -> str:
     return "\n".join(lines)
 
 
+def _mark_last_message_cached(messages: list[dict]) -> list[dict]:
+    """Return a copy of messages with cache_control added to the last message's last content block."""
+    if not messages:
+        return messages
+    last = messages[-1]
+    content = last["content"]
+    if isinstance(content, str):
+        new_content = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+    elif isinstance(content, list) and content:
+        new_content = [*content[:-1], {**content[-1], "cache_control": {"type": "ephemeral"}}]
+    else:
+        return messages
+    return [*messages[:-1], {**last, "content": new_content}]
+
+
 def chat_alpinist(
     api_messages: list[dict],
     today: date,
@@ -72,16 +87,20 @@ def chat_alpinist(
     from src.tools import ALL_TOOLS, dispatch_tool
 
     profile_block = _format_profile(user_params) + "\n\n" if user_params else ""
-    system = f"Today's date: {today.isoformat()}\n\n{profile_block}{_ALPINIST_CHAT_SYSTEM}"
+    system = [{"type": "text",
+               "text": f"Today's date: {today.isoformat()}\n\n{profile_block}{_ALPINIST_CHAT_SYSTEM}",
+               "cache_control": {"type": "ephemeral"}}]
     working = list(api_messages[-_MAX_CHAT_TURNS:])
     new_messages: list[dict] = []
 
     while True:
+        # Mark last message as cacheable so subsequent calls hit on the full prior context
+        cached_working = _mark_last_message_cached(working)
         with _get_client().messages.stream(
             model=_CHAT_MODEL,
             max_tokens=4096,
             system=system,
-            messages=working,
+            messages=cached_working,
             tools=ALL_TOOLS,
         ) as stream:
             for chunk in stream.text_stream:
@@ -112,8 +131,9 @@ def chat_alpinist(
 
         # Dispatch each tool call and collect results
         tool_results = []
+        parallel = len(tool_blocks) > 1
         for block in tool_blocks:
-            yield {"type": "tool_start", "name": block.name, "input": block.input}
+            yield {"type": "tool_start", "name": block.name, "input": block.input, "parallel": parallel}
             error = None
             try:
                 result = dispatch_tool(block.name, block.input)

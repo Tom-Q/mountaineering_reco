@@ -397,9 +397,93 @@ RETRIEVE_DOCUMENT_TOOL: dict = {
     },
 }
 
+FETCH_ROUTE_FULL_TOOL: dict = {
+    "name": "fetch_route_full",
+    "description": (
+        "Search Camptocamp for a route by name, select the best match, fetch its full topo, "
+        "pick the most relevant recent trip reports, and return concise extractions — all in one call. "
+        "Use this instead of chaining search_routes_by_name → fetch_route → get_outing_list → get_outing_detail. "
+        "If multiple plausible routes are found with meaningfully different characteristics, "
+        "returns all candidates with ambiguous=true so you can ask the user which they mean."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Route name or description to search for on Camptocamp.",
+            },
+            "goal": {
+                "type": "string",
+                "description": (
+                    "What to look for in the route and trip reports, e.g. "
+                    "'current conditions and approach for a summer ascent'."
+                ),
+            },
+        },
+        "required": ["query", "goal"],
+    },
+}
+
+SEARCH_AND_EXTRACT_TOOL: dict = {
+    "name": "search_and_extract",
+    "description": (
+        "Search the local document corpus and extract relevant information in one step. "
+        "Runs semantic search over ~17,000 documents (SummitPost, hikr, SAC, passion-alpes, "
+        "lemkeclimbs, Freedom of the Hills, Mémento FFCAM, refuges), selects the most relevant "
+        "results via a quick relevance check, fetches those documents, and returns concise "
+        "extractions — without exposing full document text. "
+        "Use this as the primary way to query the local corpus. "
+        "Use multiple queries to search from different angles simultaneously."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "queries": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "One or more search queries in any language.",
+            },
+            "goal": {
+                "type": "string",
+                "description": (
+                    "What to extract from retrieved documents, e.g. "
+                    "'approach route and hut options for Barre des Écrins'."
+                ),
+            },
+            "n_summaries": {
+                "type": "integer",
+                "description": "Card summaries to retrieve per query (default 5, max 10).",
+            },
+            "doc_type": {
+                "type": "string",
+                "description": "Filter by type: route_description, personal_trip_report, hut, manual, other.",
+            },
+            "language": {
+                "type": "string",
+                "description": "Filter by language ISO code (en, fr, de, it, …).",
+            },
+            "area": {
+                "type": "string",
+                "description": "Named mountain range to restrict results to.",
+            },
+            "near": {
+                "type": "string",
+                "description": "Place name to restrict results to a radius around.",
+            },
+            "radius_km": {
+                "type": "number",
+                "description": "Radius in km around 'near' (default 50).",
+            },
+        },
+        "required": ["queries", "goal"],
+    },
+}
+
 ALL_TOOLS: list[dict] = [
     WEATHER_TOOL,
     AVALANCHE_TOOL,
+    FETCH_ROUTE_FULL_TOOL,
     SEARCH_ROUTES_BY_NAME_TOOL,
     SEARCH_ROUTES_BY_AREA_TOOL,
     FETCH_ROUTE_TOOL,
@@ -407,6 +491,7 @@ ALL_TOOLS: list[dict] = [
     GET_OUTING_DETAIL_TOOL,
     MAKE_ROUTE_TOOL,
     SHOW_IMAGES_TOOL,
+    SEARCH_AND_EXTRACT_TOOL,
     SEARCH_DOCUMENTS_TOOL,
     RETRIEVE_DOCUMENT_TOOL,
 ]
@@ -816,6 +901,323 @@ def _handle_get_avalanche_bulletin(tool_input: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# fetch_route_full helpers
+# ---------------------------------------------------------------------------
+
+def _select_routes(route_stubs: list[dict], goal: str) -> tuple[list[int], bool]:
+    """Haiku call to select which C2C routes match the goal.
+    Returns (list of route_ids, ambiguous). ambiguous=True when multiple
+    plausible routes with different characteristics are found."""
+    import json as _json
+    from src.client import _get_client
+    lines = "\n".join(
+        f"[{i}] id={r.get('document_id')} title={r.get('title_prefix','')} {r.get('title','')} "
+        f"grade={r.get('global_rating','')} summary={str(r.get('summary',''))[:150]}"
+        for i, r in enumerate(route_stubs[:10])
+    )
+    response = _get_client().messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=200,
+        system=(
+            'Select routes that match the goal. Return JSON: {"indices": [0,1,...], "ambiguous": false}. '
+            'Set ambiguous=true if multiple routes match with meaningfully different characteristics. '
+            'Return at most 2 indices.'
+        ),
+        messages=[{"role": "user", "content": f"Goal: {goal}\n\nRoutes:\n{lines}"}],
+    )
+    try:
+        parsed = _json.loads(response.content[0].text)
+        indices = parsed.get("indices", [])[:2]
+        ambiguous = bool(parsed.get("ambiguous", False))
+        ids = [route_stubs[i]["document_id"] for i in indices if 0 <= i < len(route_stubs)]
+        return ids, ambiguous
+    except (ValueError, KeyError, IndexError):
+        return [route_stubs[0]["document_id"]] if route_stubs else [], False
+
+
+def _select_outings(outing_stubs: list[dict], goal: str) -> list[int]:
+    """Haiku call to pick which outing stubs are worth reading in full."""
+    import json as _json
+    from src.client import _get_client
+    lines = "\n".join(
+        f"[{i}] id={s.get('document_id')} date={s.get('date_start','')} "
+        f"rating={s.get('condition_rating','')} grade={s.get('global_rating','')}"
+        for i, s in enumerate(outing_stubs[:20])
+    )
+    response = _get_client().messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        system=(
+            "Pick the most relevant outings (max 3). Prefer recent and highly rated. "
+            "Return a JSON array of indices e.g. [0, 2]."
+        ),
+        messages=[{"role": "user", "content": f"Goal: {goal}\n\nOutings:\n{lines}"}],
+    )
+    try:
+        indices = _json.loads(response.content[0].text)
+        return [outing_stubs[i]["document_id"] for i in indices if 0 <= i < len(outing_stubs)]
+    except (ValueError, KeyError, IndexError):
+        return [s["document_id"] for s in outing_stubs[:2]]
+
+
+def _summarise_route(route: dict) -> dict:
+    """Lean route summary for the LLM — omits raw locale blobs."""
+    loc = route.get("_locale") or {}
+    return {
+        "id": route.get("document_id"),
+        "title": f"{route.get('title_prefix','')} {loc.get('title','')}".strip(),
+        "url": f"https://www.camptocamp.org/routes/{route.get('document_id')}",
+        "global_rating": route.get("global_rating"),
+        "elevation_max": route.get("elevation_max"),
+        "description": loc.get("description", "")[:1500],
+        "approach": loc.get("approach", "")[:800],
+        "gear": loc.get("gear", "")[:400],
+    }
+
+
+def _handle_fetch_route_full(tool_input: dict) -> dict:
+    import concurrent.futures
+    from src.camptocamp import fetch_outing_full, fetch_outing_stubs, fetch_route, search_routes_by_name
+
+    query = tool_input["query"]
+    goal = tool_input["goal"]
+
+    # 1. Search C2C
+    stubs = search_routes_by_name(query, limit=10)
+    if not stubs:
+        return {"found": False, "query": query}
+
+    # 2. Haiku selects which routes to fetch
+    route_ids, ambiguous = _select_routes(stubs, goal)
+    if not route_ids:
+        route_ids = [stubs[0]["document_id"]]
+
+    if ambiguous:
+        candidates = [
+            {"id": s["document_id"], "title": f"{s.get('title_prefix','')} {s.get('title','')}".strip(),
+             "grade": s.get("global_rating"), "summary": s.get("summary", "")}
+            for s in stubs[:5]
+        ]
+        return {"found": True, "ambiguous": True, "candidates": candidates}
+
+    # 3. Fetch full route data (sequential — C2C rate limited)
+    routes = [fetch_route(rid) for rid in route_ids]
+
+    # 4. Fetch outing stubs + select outings per route
+    results = []
+    for route in routes:
+        rid = route["document_id"]
+        outing_stubs = fetch_outing_stubs(rid, limit=20)
+        outing_ids = _select_outings(outing_stubs, goal) if outing_stubs else []
+
+        # 5. Fetch full outings (sequential — C2C rate limited)
+        full_outings = [fetch_outing_full(oid) for oid in outing_ids]
+
+        # 6. Haiku extracts from each outing (parallel — Anthropic calls)
+        def extract_outing(outing: dict) -> dict:
+            loc = outing.get("_locale") or {}
+            text = "\n".join(filter(None, [
+                f"Date: {outing.get('date_start','')}",
+                f"Rating: {outing.get('condition_rating','')}",
+                loc.get("conditions", ""),
+                loc.get("timing", ""),
+            ]))
+            extraction = _extract_from_document(text, goal)
+            return {
+                "id": outing["document_id"],
+                "date": outing.get("date_start", ""),
+                "condition_rating": outing.get("condition_rating"),
+                "url": f"https://www.camptocamp.org/outings/{outing['document_id']}",
+                "extraction": extraction,
+            }
+
+        outing_extractions: list[dict] = []
+        if full_outings:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                outing_extractions = list(executor.map(extract_outing, full_outings))
+
+        results.append({
+            "route": _summarise_route(route),
+            "outing_extractions": outing_extractions,
+        })
+
+    return {"found": True, "ambiguous": False, "results": results}
+
+
+# ---------------------------------------------------------------------------
+# search_and_extract helpers
+# ---------------------------------------------------------------------------
+
+def _get_document_text(source: str, document: dict) -> str:
+    if source == "summitpost":
+        return "\n\n".join(
+            f"{s['heading']}\n{s['body']}" for s in document.get("sections", []) if s.get("body")
+        )
+    if source in ("hikr", "lemkeclimbs", "passion_alpes", "sac"):
+        return document.get("full_text", "")
+    if source in ("freedom_of_hills", "memento_ffcam"):
+        return document.get("text", "")
+    if source == "refuges":
+        parts = [
+            document.get("name", ""),
+            f"Type: {document['type']}" if document.get("type") else "",
+            f"Altitude: {document['altitude_m']}m" if document.get("altitude_m") else "",
+            document.get("description", ""),
+            document.get("access_desc", ""),
+            f"Opening: {document['opening_dates']}" if document.get("opening_dates") else "",
+            f"Phone: {document['phone']}" if document.get("phone") else "",
+            f"Website: {document['website_url']}" if document.get("website_url") else "",
+        ]
+        return "\n".join(p for p in parts if p)
+    return ""
+
+
+def _extract_from_document(text: str, goal: str) -> str:
+    from src.client import _get_client
+    response = _get_client().messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=600,
+        system=(
+            "Extract information relevant to the goal from the document. "
+            "Be concise. If nothing is relevant, say so in one sentence."
+        ),
+        messages=[{"role": "user", "content": f"Goal: {goal}\n\nDocument:\n{text[:12000]}"}],
+    )
+    return response.content[0].text
+
+
+def _select_documents(summaries: list[dict], goal: str) -> set[tuple[str, int]]:
+    import json as _json
+    from src.client import _get_client
+    summary_lines = "\n".join(
+        f"[{i}] {r['source']}--{r['pk']}: {r.get('title', '')} | {(r.get('summary') or '')[:200]}"
+        for i, r in enumerate(summaries)
+    )
+    response = _get_client().messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=200,
+        system=(
+            "Select which documents are worth reading in full to answer the goal. "
+            "Return a JSON array of indices (e.g. [0, 2]). Return [] if none are relevant."
+        ),
+        messages=[{
+            "role": "user",
+            "content": f"Goal: {goal}\n\nDocuments:\n{summary_lines}",
+        }],
+    )
+    try:
+        indices = _json.loads(response.content[0].text)
+        return {(summaries[i]["source"], summaries[i]["pk"]) for i in indices if 0 <= i < len(summaries)}
+    except (ValueError, KeyError, IndexError):
+        return {(r["source"], r["pk"]) for r in sorted(summaries, key=lambda x: x["distance"])[:2]}
+
+
+def _handle_search_and_extract(tool_input: dict) -> dict:
+    import concurrent.futures
+    from src.rag import (
+        get_freedom_section, get_hikr_report, get_lemkeclimbs_topo,
+        get_memento_section, get_passion_alpes_topo, get_refuge,
+        get_route_sections, get_sac_topo, is_available, resolve_area, search,
+    )
+    from src.geo import bbox_around, geocode_location
+
+    if not is_available():
+        return {"available": False, "note": "Document index not available."}
+
+    queries = tool_input.get("queries") or []
+    goal = tool_input["goal"]
+    n_summaries = min(int(tool_input.get("n_summaries") or 5), 10)
+    doc_type = tool_input.get("doc_type")
+    language = tool_input.get("language")
+    area = tool_input.get("area")
+    near = tool_input.get("near")
+    radius_km = float(tool_input.get("radius_km") or 50)
+
+    lat_min = lat_max = lon_min = lon_max = None
+    geo_note: str | None = None
+    if area:
+        bbox = resolve_area(area)
+        if bbox:
+            lat_min, lat_max, lon_min, lon_max = bbox
+            geo_note = f"Filtered to area '{area}'."
+        else:
+            geo_note = f"Area '{area}' not found — returning unfiltered results."
+    elif near:
+        geo = geocode_location(near)
+        if geo:
+            lat_min, lat_max, lon_min, lon_max = bbox_around(geo["lat"], geo["lon"], radius_km)
+            geo_note = f"Filtered to {radius_km:.0f}km around '{near}'."
+        else:
+            geo_note = f"Could not geocode '{near}' — returning unfiltered results."
+
+    # Collect unique results across all queries
+    all_summaries: list[dict] = []
+    seen: set[str] = set()
+    for query in queries:
+        for r in search(query, n_results=n_summaries, doc_type=doc_type, language=language,
+                        lat_min=lat_min, lat_max=lat_max, lon_min=lon_min, lon_max=lon_max):
+            key = f"{r['source']}--{r['pk']}"
+            if key not in seen:
+                seen.add(key)
+                all_summaries.append(r)
+
+    if not all_summaries:
+        out: dict = {"available": True, "summaries": [], "extractions": []}
+        if geo_note:
+            out["geo_filter"] = geo_note
+        return out
+
+    # Haiku routing: select which documents to expand
+    selected = _select_documents(all_summaries, goal)
+
+    # Fetch + extract selected documents in parallel
+    dispatch = {
+        "summitpost":       get_route_sections,
+        "passion_alpes":    get_passion_alpes_topo,
+        "sac":              get_sac_topo,
+        "hikr":             get_hikr_report,
+        "lemkeclimbs":      get_lemkeclimbs_topo,
+        "freedom_of_hills": get_freedom_section,
+        "memento_ffcam":    get_memento_section,
+        "refuges":          get_refuge,
+    }
+
+    def fetch_and_extract(summary: dict) -> dict | None:
+        source, pk = summary["source"], summary["pk"]
+        fn = dispatch.get(source)
+        if not fn:
+            return None
+        document = fn(pk)
+        if not document:
+            return None
+        text = _get_document_text(source, document)
+        if not text:
+            return None
+        extraction = _extract_from_document(text, goal)
+        return {
+            "source": source,
+            "pk": pk,
+            "title": document.get("title") or document.get("name", ""),
+            "url": document.get("url", ""),
+            "extraction": extraction,
+        }
+
+    to_fetch = [s for s in all_summaries if (s["source"], s["pk"]) in selected]
+    extractions: list[dict] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(fetch_and_extract, s): s for s in to_fetch}
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                extractions.append(result)
+
+    out = {"available": True, "summaries": all_summaries, "extractions": extractions}
+    if geo_note:
+        out["geo_filter"] = geo_note
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -829,8 +1231,10 @@ _HANDLERS: dict[str, Any] = {
     "get_outing_detail": _handle_get_outing_detail,
     "make_route": _handle_make_route,
     "show_images": _handle_show_images,
+    "fetch_route_full": _handle_fetch_route_full,
     "search_documents": _handle_search_documents,
     "retrieve_document": _handle_retrieve_document,
+    "search_and_extract": _handle_search_and_extract,
 }
 
 

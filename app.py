@@ -183,7 +183,8 @@ with tab_chat:
                             elif event["type"] == "tool_start":
                                 log({"type": "tool_call", "name": event["name"], "input": event["input"]})
                                 current_status_label = tool_status_label(event["name"], event["input"])
-                                current_status = st.status(current_status_label + "...", expanded=False)
+                                prefix = "⚡ " if event.get("parallel") else ""
+                                current_status = st.status(prefix + current_status_label + "...", expanded=False)
 
                             elif event["type"] == "tool_end":
                                 log({
