@@ -6,6 +6,7 @@ exposes search_range() for fuzzy name lookup.
 """
 
 import json
+import math
 from functools import lru_cache
 from pathlib import Path
 
@@ -20,6 +21,10 @@ def _load_lookup() -> dict:
         return json.load(f)
 
 
+def _is_valid_name(val) -> bool:
+    return bool(val) and isinstance(val, str) and val.lower() != "nan" and not (isinstance(val, float) and math.isnan(val))
+
+
 def _build_candidates(lookup: dict) -> list[tuple[str, int, str]]:
     """
     Returns (candidate_string, gmba_id, field) tuples for rapidfuzz matching.
@@ -30,10 +35,10 @@ def _build_candidates(lookup: dict) -> list[tuple[str, int, str]]:
         gmba_id = int(gmba_id_str)
         for field in ("name_en", "name_fr", "name_de"):
             val = entry.get(field)
-            if val:
+            if _is_valid_name(val):
                 rows.append((val, gmba_id, field))
         for local in entry.get("local_names") or []:
-            if local:
+            if _is_valid_name(local):
                 rows.append((local, gmba_id, "local"))
     return rows
 

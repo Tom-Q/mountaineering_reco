@@ -144,8 +144,8 @@ LLM weather output is too verbose. Fix: instruct the model to report facts rathe
 ### Meteoblue for weather
 Switch from Open-Meteo to [meteoblue](https://www.meteoblue.com) for weather forecasts. Meteoblue is better quality (proprietary model, higher resolution in the Alps, multi-model ensemble), and Camptocamp already links to it per-hut. Requires an API key (paid). Relevant once the tool-use architecture is in place — the weather tool is the natural integration point.
 
-### GMBA unnamed polygons — fall back to ancestry name
-Some GMBA Basic polygons have no official name (all name fields are `nan`). These get `mountain_range: None` in generated cards. Fix: when all name fields are empty, parse the last named segment from the `ancestry_en` string (e.g. `"... > Glarus Alps > Glarus Alps (nn)"` → `"Glarus Alps"`). Also clean up `nan` values already written to `ranges_lookup.json` at the source, in `scripts/precompute_ranges.py`.
+### GMBA unnamed polygons — fall back to ancestry name ✅ Done
+`scripts/fix_ranges_lookup.py` patched the existing `ranges_lookup.json` in-place: 12,150 NaN field values replaced with null, 4,733 `"nan"` local_names removed, 666 ancestry fallback names applied. `precompute_ranges.py` updated to produce clean JSON on future regeneration. `src/mountain_ranges.py` guards against NaN values defensively. Zero entries now have no searchable name.
 
 ### Avalanche — regions not yet integrated
 - **Slovenia**: CAAMLv6 format, same as existing EAWS feeds. Date-keyed URL known; needs a stable `/latest/` path confirmed before wiring up. See comment in `src/avalanche.py`.

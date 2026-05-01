@@ -11,6 +11,7 @@ Usage:
 """
 
 import json
+import math
 import re
 import sqlite3
 import time
@@ -47,6 +48,27 @@ def load_basic_polygons() -> gpd.GeoDataFrame:
 # Export ranges_lookup.json
 # ---------------------------------------------------------------------------
 
+def _nan_to_none(val):
+    """Convert float NaN (from shapefile) to None; pass other values through."""
+    if isinstance(val, float) and math.isnan(val):
+        return None
+    return val or None
+
+
+def _ancestry_fallback(ancestry_en: str | None) -> str | None:
+    """Extract the last named segment from a GMBA ancestry path as a fallback name.
+
+    e.g. "Alps > Western Alps > Mont Blanc Massif" -> "Mont Blanc Massif"
+         "Alps > Glarus Alps > Glarus Alps (nn)"   -> "Glarus Alps"
+    """
+    if not ancestry_en or not isinstance(ancestry_en, str):
+        return None
+    last = ancestry_en.strip().rsplit(" > ", 1)[-1].strip()
+    last = re.sub(r"\s*\([a-z]{2,3}\)\s*$", "", last).strip()  # strip language codes like (nn)
+    last = last.rstrip("*").strip()                              # strip GMBA uncertainty marker
+    return last or None
+
+
 def export_lookup(basic: gpd.GeoDataFrame) -> None:
     print("Exporting ranges_lookup.json…")
     lookup = {}
@@ -57,21 +79,29 @@ def export_lookup(basic: gpd.GeoDataFrame) -> None:
             for part in str(row["LocalNames"]).split(";"):
                 part = part.strip()
                 m = re.match(r"^(.+?)\s*\([^)]+\)$", part)
-                if m:
-                    local.append(m.group(1).strip())
-                elif part:
-                    local.append(part)
+                name = m.group(1).strip() if m else part
+                if name and name.lower() != "nan":
+                    local.append(name)
+
+        name_en = _nan_to_none(row.get("Name_EN"))
+        name_fr = _nan_to_none(row.get("Name_FR"))
+        name_de = _nan_to_none(row.get("Name_DE"))
+        ancestry_en = _nan_to_none(row.get("Path"))
+
+        # Fall back to ancestry name when no official name exists
+        if not name_en and not name_fr and not name_de and not local:
+            name_en = _ancestry_fallback(ancestry_en)
 
         centroid = row["geometry"].centroid
         lookup[int(gmba_id)] = {
-            "name_en":      row.get("Name_EN") or None,
-            "name_fr":      row.get("Name_FR") or None,
-            "name_de":      row.get("Name_DE") or None,
+            "name_en":      name_en,
+            "name_fr":      name_fr,
+            "name_de":      name_de,
             "local_names":  local,
             "centroid_lon": round(centroid.x, 5),
             "centroid_lat": round(centroid.y, 5),
-            "ancestry_ids": row.get("Path_ID") or None,
-            "ancestry_en":  row.get("Path")    or None,
+            "ancestry_ids": _nan_to_none(row.get("Path_ID")),
+            "ancestry_en":  ancestry_en,
         }
 
     LOOKUP_OUT.write_text(json.dumps(lookup, ensure_ascii=False, indent=2))
