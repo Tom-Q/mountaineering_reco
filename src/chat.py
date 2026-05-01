@@ -71,6 +71,7 @@ def chat_alpinist(
     api_messages: list[dict],
     today: date,
     user_params: dict | None = None,
+    model: str = _CHAT_MODEL,
 ) -> Generator[dict, None, None]:
     """
     Agentic chat loop with tool support. Yields typed event dicts:
@@ -97,7 +98,7 @@ def chat_alpinist(
         # Mark last message as cacheable so subsequent calls hit on the full prior context
         cached_working = _mark_last_message_cached(working)
         with _get_client().messages.stream(
-            model=_CHAT_MODEL,
+            model=model,
             max_tokens=4096,
             system=system,
             messages=cached_working,

@@ -64,6 +64,15 @@ WEATHER_TOOL: dict = {
                 "type": "number",
                 "description": "WGS84 longitude of the route location.",
             },
+            "location": {
+                "type": "string",
+                "description": (
+                    "Place name to geocode when explicit coordinates are not available "
+                    "(e.g. 'Frendo Spur, Mont Blanc aiguilles'). "
+                    "Used only when latitude/longitude are omitted. "
+                    "The result includes a geocoding_note — always report it to the user."
+                ),
+            },
             "elevation_m": {
                 "type": "integer",
                 "description": (
@@ -73,7 +82,7 @@ WEATHER_TOOL: dict = {
                 ),
             },
         },
-        "required": ["latitude", "longitude"],
+        "required": [],
     },
 }
 
@@ -98,8 +107,17 @@ AVALANCHE_TOOL: dict = {
                 "type": "number",
                 "description": "WGS84 longitude of the route location.",
             },
+            "location": {
+                "type": "string",
+                "description": (
+                    "Place name to geocode when explicit coordinates are not available "
+                    "(e.g. 'Frendo Spur, Mont Blanc aiguilles'). "
+                    "Used only when latitude/longitude are omitted. "
+                    "The result includes a geocoding_note — always report it to the user."
+                ),
+            },
         },
-        "required": ["latitude", "longitude"],
+        "required": [],
     },
 }
 
@@ -158,13 +176,14 @@ SEARCH_ROUTES_BY_AREA_TOOL: dict = {
     },
 }
 
-FETCH_ROUTE_TOOL: dict = {
-    "name": "fetch_route",
+GET_ROUTE_BY_ID_TOOL: dict = {
+    "name": "get_route_by_id",
     "description": (
         "Fetch full details for a Camptocamp route by its numeric ID. "
         "Returns the route description, approach notes, gear list, all grade fields, "
         "elevation, coordinates, and a link to the Camptocamp page. "
-        "Use after search to get the full topo for a specific route."
+        "Use only when you already have the numeric ID (e.g. from a previous search result). "
+        "Prefer find_route for lookups by name."
     ),
     "input_schema": {
         "type": "object",
@@ -402,12 +421,13 @@ RETRIEVE_DOCUMENT_TOOL: dict = {
     },
 }
 
-FETCH_ROUTE_FULL_TOOL: dict = {
-    "name": "fetch_route_full",
+FIND_ROUTE_TOOL: dict = {
+    "name": "find_route",
     "description": (
         "Search Camptocamp for a route by name, select the best match, fetch its full topo, "
-        "pick the most relevant recent trip reports, and return concise extractions — all in one call. "
-        "Use this instead of chaining search_routes_by_name → fetch_route → get_outing_list → get_outing_detail. "
+        "build a seasonality histogram from all trip reports, pick the most relevant recent "
+        "trip reports, and return concise extractions — all in one call. "
+        "Use this as the primary way to look up any Camptocamp route by name. "
         "If multiple plausible routes are found with meaningfully different characteristics, "
         "returns all candidates with ambiguous=true so you can ask the user which they mean."
     ),
@@ -485,20 +505,26 @@ SEARCH_AND_EXTRACT_TOOL: dict = {
     },
 }
 
+WEB_SEARCH_TOOL: dict = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 5,
+}
+
 ALL_TOOLS: list[dict] = [
     WEATHER_TOOL,
     AVALANCHE_TOOL,
-    FETCH_ROUTE_FULL_TOOL,
+    FIND_ROUTE_TOOL,
     SEARCH_ROUTES_BY_NAME_TOOL,
     SEARCH_ROUTES_BY_AREA_TOOL,
-    FETCH_ROUTE_TOOL,
+    GET_ROUTE_BY_ID_TOOL,
     GET_OUTING_LIST_TOOL,
     GET_OUTING_DETAIL_TOOL,
-    MAKE_ROUTE_TOOL,
     SHOW_IMAGES_TOOL,
     SEARCH_AND_EXTRACT_TOOL,
     SEARCH_DOCUMENTS_TOOL,
     RETRIEVE_DOCUMENT_TOOL,
+    WEB_SEARCH_TOOL,
 ]
 
 # ---------------------------------------------------------------------------
@@ -506,17 +532,34 @@ ALL_TOOLS: list[dict] = [
 # ---------------------------------------------------------------------------
 
 def _handle_get_weather_forecast(tool_input: dict) -> dict:
-    lat = tool_input["latitude"]
-    lon = tool_input["longitude"]
+    lat = tool_input.get("latitude")
+    lon = tool_input.get("longitude")
     elevation_m = tool_input.get("elevation_m")
-    today = date.today()
+    geocoding_note = None
 
+    if lat is None or lon is None:
+        location = tool_input.get("location")
+        if not location:
+            return {"error": "Provide latitude+longitude or a location string."}
+        from src.geo import geocode_location
+        geo = geocode_location(location)
+        if not geo:
+            return {"error": f"Could not geocode '{location}'. Supply explicit coordinates."}
+        lat, lon = geo["lat"], geo["lon"]
+        importance = geo.get("importance")
+        importance_str = f"{importance:.2f}" if importance is not None else "unknown"
+        geocoding_note = (
+            f"Coordinates geocoded via Nominatim: \"{geo['display_name']}\" "
+            f"(importance: {importance_str}). Verify this is the intended location."
+        )
+
+    today = date.today()
     summary = fetch_weather_for_coords(lat, lon, today, elevation_m=elevation_m)
 
     # Serialise _DayForecast dataclasses from forecast_text source data.
     # WeatherSummary already has the pre-formatted strings; we expose the
     # structured fields so Claude can reason over them directly.
-    return {
+    result: dict = {
         "fetch_date": summary.fetch_date,
         "coords": {"lat": lat, "lon": lon},
         "elevation_m": elevation_m,
@@ -525,6 +568,9 @@ def _handle_get_weather_forecast(tool_input: dict) -> dict:
         "daylight": summary.daylight_text,
         "errors": summary.fetch_errors,
     }
+    if geocoding_note:
+        result["geocoding_note"] = geocoding_note
+    return result
 
 
 def route_summary(route: dict) -> dict:
@@ -849,17 +895,37 @@ def _handle_show_images(tool_input: dict) -> dict:
 
 
 def _handle_get_avalanche_bulletin(tool_input: dict) -> dict:
-    lat = tool_input["latitude"]
-    lon = tool_input["longitude"]
+    lat = tool_input.get("latitude")
+    lon = tool_input.get("longitude")
+    geocoding_note = None
+
+    if lat is None or lon is None:
+        location = tool_input.get("location")
+        if not location:
+            return {"error": "Provide latitude+longitude or a location string."}
+        from src.geo import geocode_location
+        geo = geocode_location(location)
+        if not geo:
+            return {"error": f"Could not geocode '{location}'. Supply explicit coordinates."}
+        lat, lon = geo["lat"], geo["lon"]
+        importance = geo.get("importance")
+        importance_str = f"{importance:.2f}" if importance is not None else "unknown"
+        geocoding_note = (
+            f"Coordinates geocoded via Nominatim: \"{geo['display_name']}\" "
+            f"(importance: {importance_str}). Verify this is the intended location."
+        )
 
     bulletins = fetch_avalanche_bulletin(lat, lon)
 
     if not bulletins:
-        return {
+        result = {
             "coords": {"lat": lat, "lon": lon},
             "bulletins": [],
             "note": "No avalanche bulletin available for this location.",
         }
+        if geocoding_note:
+            result["geocoding_note"] = geocoding_note
+        return result
 
     def _serialise(b) -> dict:
         return {
@@ -901,6 +967,8 @@ def _handle_get_avalanche_bulletin(tool_input: dict) -> dict:
         "coords": {"lat": lat, "lon": lon},
         "bulletins": [_serialise(b) for b in bulletins],
     }
+    if geocoding_note:
+        result["geocoding_note"] = geocoding_note
     if image_blobs:
         result["_image_blobs"] = image_blobs
     return result
@@ -1262,19 +1330,19 @@ def _handle_search_and_extract(tool_input: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 _HANDLERS: dict[str, Any] = {
-    "get_weather_forecast": _handle_get_weather_forecast,
+    "get_weather_forecast":   _handle_get_weather_forecast,
     "get_avalanche_bulletin": _handle_get_avalanche_bulletin,
-    "search_routes_by_name": _handle_search_routes_by_name,
-    "search_routes_by_area": _handle_search_routes_by_area,
-    "fetch_route": _handle_fetch_route,
-    "get_outing_list": _handle_get_outing_list,
-    "get_outing_detail": _handle_get_outing_detail,
-    "make_route": _handle_make_route,
-    "show_images": _handle_show_images,
-    "fetch_route_full": _handle_fetch_route_full,
-    "search_documents": _handle_search_documents,
-    "retrieve_document": _handle_retrieve_document,
-    "search_and_extract": _handle_search_and_extract,
+    "search_routes_by_name":  _handle_search_routes_by_name,
+    "search_routes_by_area":  _handle_search_routes_by_area,
+    "get_route_by_id":        _handle_fetch_route,
+    "get_outing_list":        _handle_get_outing_list,
+    "get_outing_detail":      _handle_get_outing_detail,
+    "make_route":             _handle_make_route,
+    "show_images":            _handle_show_images,
+    "find_route":             _handle_fetch_route_full,
+    "search_documents":       _handle_search_documents,
+    "retrieve_document":      _handle_retrieve_document,
+    "search_and_extract":     _handle_search_and_extract,
 }
 
 
@@ -1284,8 +1352,8 @@ def dispatch_tool(name: str, tool_input: dict) -> dict:
 
     Returns a JSON-serializable dict to pass back to the API as a
     tool_result content block.
-
-    Raises KeyError if the tool name is not registered.
     """
-    handler = _HANDLERS[name]
+    handler = _HANDLERS.get(name)
+    if handler is None:
+        return {"error": f"Tool '{name}' is not registered for client-side dispatch (may be server-side)."}
     return handler(tool_input)

@@ -35,6 +35,13 @@ _collection = None
 def _get_model():
     global _model
     if _model is None:
+        import logging
+        import os
+        import warnings
+        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+        logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+        warnings.filterwarnings("ignore", message="Can't initialize NVML")
         from sentence_transformers import SentenceTransformer
         _model = SentenceTransformer(_MODEL_NAME)
     return _model

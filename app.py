@@ -95,6 +95,10 @@ with st.sidebar:
         help="Minimum fixed gear expected. Higher P = more self-reliance required.",
     )
 
+    st.divider()
+    fast_mode = st.toggle("⚡ Fast mode (Haiku)", value=True,
+                          help="Uses Claude Haiku instead of Sonnet — faster and cheaper, lower quality.")
+
 # ---------------------------------------------------------------------------
 # Session state
 # ---------------------------------------------------------------------------
@@ -167,6 +171,7 @@ with tab_chat:
 
                         _show_thinking()
 
+                        _model = "claude-haiku-4-5-20251001" if fast_mode else "claude-sonnet-4-6"
                         for event in chat_alpinist(
                             st.session_state["api_messages"],
                             date.today(),
@@ -174,6 +179,7 @@ with tab_chat:
                                 rock_onsight, rock_trad, ice_max, mixed_max, alpine_max,
                                 engagement_max, risk_max, exposition_max, equipment_min,
                             ),
+                            model=_model,
                         ):
                             if event["type"] == "text":
                                 accumulated += event["text"]
