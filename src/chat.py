@@ -93,6 +93,10 @@ def chat_alpinist(
                "cache_control": {"type": "ephemeral"}}]
     working = list(api_messages[-_MAX_CHAT_TURNS:])
     new_messages: list[dict] = []
+    source_data_parts: list[str] = []
+    find_route_called = False
+    _SOURCE_TOOLS = {"find_route", "search_and_extract", "get_route_by_id",
+                     "search_documents", "retrieve_document"}
 
     while True:
         # Mark last message as cacheable so subsequent calls hit on the full prior context
@@ -127,7 +131,12 @@ def chat_alpinist(
 
         tool_blocks = [b for b in final.content if b.type == "tool_use"]
         if not tool_blocks:
-            yield {"type": "done", "new_api_messages": new_messages}
+            yield {
+                "type": "done",
+                "new_api_messages": new_messages,
+                "find_route_called": find_route_called,
+                "source_data": "\n\n".join(source_data_parts),
+            }
             return
 
         # Dispatch each tool call and collect results
@@ -149,6 +158,10 @@ def chat_alpinist(
                         "image_blobs": image_blobs or {},
                     }
                 result_str = json.dumps(result)
+                if block.name in _SOURCE_TOOLS:
+                    source_data_parts.append(f"### {block.name}\n{result_str[:3000]}")
+                if block.name == "find_route":
+                    find_route_called = True
             except Exception as e:
                 result_str = json.dumps({"error": str(e)})
                 error = str(e)

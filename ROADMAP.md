@@ -1,140 +1,49 @@
 # Improvement Roadmap: Mountaineering Recommender
 
-## Architecture evolution
+## What's been built
 
-### Phase 1 — Tool use ✅ Done
+**Phases 1–4.6 complete.** The app has: tool-use agentic chat (Sonnet/Haiku toggle), Camptocamp API integration, a local corpus of ~17,000 documents across 8 sources (SummitPost, hikr, SAC, passion-alpes, lemkeclimbs, Freedom of the Hills, Mémento FFCAM, refuges), ChromaDB RAG with card-based retrieval, prompt caching, parallel tool calls, web search, a seasonality histogram from C2C outing stubs, daylight calculation, avalanche bulletins (France/CH/IT/AT), GMBA mountain range lookup, and a post-hoc reviewer agent for hallucination detection.
 
-### Phase 2 — Chat tab ✅ Done
+---
 
-### Phase 3 — Hut data ✅ Done
+## Phase 5 — UI and prompting improvements
 
-Built local hut database from refuges.info API. 4,820 huts in `refuges.db`; 1,199 (all guarded refuges + gîtes d'étape + summarised huts) indexed in ChromaDB and searchable via RAG. Metadata per hut: coordinates, altitude, capacity, opening dates, guardian contact, access description, price, meteoblue URL.
+### Remaining items
 
-### Phase 4 — Topo scraping ✅ Done
+- **Weather: multiple elevation bands** — fetch at trailhead, mid-route, and summit for routes with large altitude gain. The weather tool currently accepts a single `elevation_m`; extend to a list.
+- **C2C profile integration** — load grades from a public Camptocamp numeric user ID via `GET /profiles/{user_id}` and populate the sidebar selectors automatically.
+- **Meteoblue for weather** — switch from Open-Meteo to Meteoblue (better resolution in the Alps, multi-model ensemble). Requires a paid API key.
+- **Weather prompt verbosity** — instruct the model to report facts rather than draw stability conclusions.
 
-Built a curated local corpus of static route beta and mountaineering reference material. All scrapers live in the private repo (`Tom-Q/mountaineering_scraper`).
+### Avalanche — regions not yet integrated
 
-**Corpus:**
+- **Slovenia**: CAAMLv6 format, same as existing EAWS feeds. Stable `/latest/` URL path needs confirming before wiring up.
+- **Spanish Pyrenees (AEMET)**: HTML only, not machine-readable. Surface a direct link to the bulletin page for routes in affected regions (Nov–May): https://www.aemet.es/es/eltiempo/prediccion/montana/boletin_peligro_aludes
+- **AT-05/AT-06/AT-08**: wired up in `_EAWS_PROVIDERS` but feeds currently 404 (seasonal). Will activate automatically when feeds return.
 
-| Source | Coverage | Status |
-|---|---|---|
-| Camptocamp route pages | Worldwide | Complement to API data already integrated |
-| SummitPost | Worldwide mountaineering routes | ✅ ~2,300 routes in `summitpost.db` |
-| hikr.org | Alps multilingual trip reports (DE/IT/FR/EN) | ✅ ~10,700 reports in `hikr.db` |
-| passion-alpes.com | French-language Alpine routes | ✅ `passion_alpes.db` |
-| lemkeclimbs.com | English-language topos, mostly Americas | ✅ `lemkeclimbs.db` |
-| SAC route database | Switzerland | ✅ `sac.db` |
-| Freedom of the Hills (10th ed.) | General mountaineering reference | ✅ `freedom_of_the_hills.db` |
-| Mémento FFCAM / UIAA (FR) | General mountaineering reference | ✅ `memento_ffcam.db` |
+---
 
-
-### Phase 4.5 — RAG: document cards + retrieval ✅ Done
-
-1. **Generate cards** ✅ — `scripts/generate_cards.py` generated structured metadata cards for all ~17,000 documents via Anthropic Batch API. Each card: `doc_type`, `date`, `trustworthiness`, `mountain_range`, `grades`, `language`, `summary`. Cards stored as columns in each source DB table.
-2. **Embed cards** ✅ — `scripts/build_index.py` builds ChromaDB `cards` collection from all 8 source DBs. 17,043 documents indexed. `doc_type` stored as native array for `$contains` filtering.
-3. **Retrieve then read** ✅ — `search_and_extract` tool: search → Haiku routing → parallel Haiku extraction. Full document text never enters main conversation context. `retrieve_document` available for raw access.
-4. **Test** — retrieval quality not formally evaluated yet.
-
-**Stack:** ChromaDB (local), `all-mpnet-base-v2` embeddings, Claude Haiku for card generation and in-context extraction.
-
-### Phase 4.6 — API cost optimisation ✅ Done
-
-Single query was costing ~$0.35 due to O(n²) context growth with serial tool calls.
-
-- **Prompt caching** — system prompt + progressive conversation caching. Each loop iteration marks the last message cacheable; subsequent calls only pay for the delta. Cache reads cost 10% of normal input price.
-- **Parallel tool calls** — system prompt instructs LLM to batch independent calls in one response. UI shows ⚡ prefix for parallel tool invocations.
-- **`search_and_extract`** — replaces `search_documents` + `retrieve_document` for normal RAG use. One tool call: search → Haiku routing on summaries → parallel Haiku extraction. Full document text never enters main context.
-- **`fetch_route_full`** — replaces the serial C2C chain (search → fetch → outing list → outing details). One tool call: search → Haiku route selection → fetch topo → Haiku outing selection → parallel Haiku extraction.
-
-### Phase 5 — UI and prompting improvements
-
-- **Report template overhaul** — adopt consistent sections: Overview → Route description → Crux → Hazards → Current Conditions → Trip Reports → Information Gaps → Sources. See backlog for full spec.
-- **Weather prompt verbosity** — instruct model to report facts rather than draw stability conclusions.
-- **Daylight calculation** — sunrise/sunset/civil twilight for route coordinates and planned date using the `astral` library.
-- **Weather: multiple elevation bands** — fetch at trailhead, mid-route, summit for routes with large altitude gain.
-- **C2C profile integration** — load grades from a public Camptocamp user ID via `GET /profiles/{user_id}`.
-
-### Phase 6 — Hosting + web frontend
+## Phase 6 — Hosting + web frontend
 
 Expose the tool as an API and embed it in the Astro website (thomas-colin.com, hosted on Netlify free tier).
 
-**Backend:** Rewrite or wrap the Streamlit app as a FastAPI service. The UI/logic separation already in place makes this tractable. Host on a persistent server so ChromaDB (vector index) survives restarts.
+**Backend:** Wrap the Streamlit app as a FastAPI service. The UI/logic separation already in place makes this tractable. Host on a persistent server so ChromaDB survives restarts.
 
 **Frontend:** JavaScript chatbot UI on the Astro site, calling the FastAPI backend.
 
 **Access control:** shared secret key distributed to friends via email/WhatsApp. Backend checks the key on every request. Keeps Claude API costs bounded (~10 EUR/month hard limit).
 
 **Hosting plan:**
-- **Pre-RAG** (app as-is): Render free tier works — no persistent storage needed, cold starts are just annoying
-- **With RAG**: Render free tier breaks — ChromaDB index lives on disk, wiped on every restart (every 15 min of inactivity). Re-building takes 5–10 min, not viable
-- **Target: Hetzner CAX11** (~€5/month, 2 vCPU ARM, 4GB RAM, persistent disk) — best value once RAG is added. Same price as Render paid tier but full VPS control
-- **Alternative**: store the ChromaDB index in the private repo (~50MB binary) and fetch it on startup — hacky but functional for our small corpus if avoiding a VPS is important
-- **Oracle Cloud free tier** (2 permanent ARM VMs) — genuinely free with persistent disk, more setup
+- **Target: Hetzner CAX11** (~€5/month, 2 vCPU ARM, 4GB RAM, persistent disk) — best value. Same price as Render paid tier but full VPS control.
+- **Alternative**: store the ChromaDB index in the private repo (~50MB binary) and fetch it on startup — hacky but functional for a small corpus.
+- **Oracle Cloud free tier** (2 permanent ARM VMs) — genuinely free with persistent disk, more setup.
 
 ---
 
 ## Backlog
 
-### Reviewer agent for route analysis
-`src/route_analysis.py` (now deleted) had a two-pass LLM pattern: a writer pass produces a
-structured analysis, then a reviewer pass checks for invented conditions or hallucinated data
-and either passes or returns a revised output as JSON. The reviewer used a separate system
-prompt (`prompts/route_reviewer.md`) and the same Haiku model. If a structured analysis mode
-is revived, restore this pattern — it's a clean way to catch confident hallucinations without
-adding complexity to the main prompt.
+### Reviewer agent — known limitations
+The post-hoc reviewer (Haiku) receives raw JSON tool results as source data, which is verbose. A future improvement: pre-format source data into a clean human-readable summary before passing it to the reviewer, so fact-checking is more reliable.
 
-```python
-# Sketch of the pattern:
-response = client.messages.create(model=..., system=WRITER_PROMPT, messages=[user_msg])
-analysis = response.content[0].text
-
-reviewer_msg = "## Source data\n" + user_msg + "\n\n---\n\n## Analysis to review\n" + analysis
-verdict = client.messages.create(model=..., system=REVIEWER_PROMPT, messages=[reviewer_msg])
-parsed = json.loads(verdict.content[0].text)
-if parsed["verdict"] == "revise" and parsed["revised_output"]:
-    analysis = parsed["revised_output"]
-```
-
-### Seasonality from outing date distribution ✅ Done
-`_format_seasonality` in `src/tools.py` builds a month histogram from all outing stubs (up to 200, fetched as part of `fetch_route_full`). Shows trip count per month with condition rating breakdown (g/f/p/?). `fetch_outing_stubs` limit raised from 20 to 200; selection still uses only the top 20.
-
-### Multi-agent parallelism ✅ Partially addressed
-Parallel tool call instruction added to system prompt. `search_and_extract` and `fetch_route_full` both use `ThreadPoolExecutor` for parallel Haiku sub-calls internally. Full multi-agent dispatch (separate agents per data source) not implemented.
-
-### Report template overhaul
-Current route analysis output is unstructured. Adopt a proper report template with consistent sections:
-Overview → Route description → Crux → Hazards → Current Conditions (weather + avalanche + daylight) → Trip Reports → Information Gaps → Sources.
-
-Notes:
-- "Crux" section: describe the hardest move/section specifically, not just the overall difficulty
-- AI disclaimer should be mandatory and appear prominently
-- Use bold sparingly — only for critical hazards, grade ratings, and weather windows
-- "Information Gaps" section must be explicit and always present (even if empty)
-- Reference: dreamiurg report template and Mount Shuksan example output
-
-### Daylight calculation ✅ Done
-`_compute_daylight_text` in `src/weather.py` uses `astral` + `timezonefinder` to compute civil dawn, sunrise, sunset, and civil dusk in local time for all 7 forecast days. Injected into the weather tool result as `daylight` field.
-
-### Weather: multiple elevation bands
-Consider fetching weather at multiple elevation bands (trailhead, mid-route, summit) for routes with large altitude gain. High-altitude wind and temperature can differ significantly from the base — relevant for routes with >1000m of elevation difference. The weather tool currently accepts a single `elevation_m`; extending it to accept a list of elevations and return one forecast per band would cover this.
-
-### C2C profile integration
-Load grades from a public Camptocamp numeric user ID and populate the sidebar selectors automatically.
-
-- `GET /profiles/{user_id}` returns grade fields and outing count
-- Main unknown: mapping C2C grade field names → internal names
-- Accept numeric ID directly (visible in profile URL: `camptocamp.org/profiles/XXXXXXX`)
-
-### Weather prompt verbosity
-LLM weather output is too verbose. Fix: instruct the model to report facts rather than draw stability conclusions.
-
-### Meteoblue for weather
-Switch from Open-Meteo to [meteoblue](https://www.meteoblue.com) for weather forecasts. Meteoblue is better quality (proprietary model, higher resolution in the Alps, multi-model ensemble), and Camptocamp already links to it per-hut. Requires an API key (paid). Relevant once the tool-use architecture is in place — the weather tool is the natural integration point.
-
-### GMBA unnamed polygons — fall back to ancestry name ✅ Done
-`scripts/fix_ranges_lookup.py` patched the existing `ranges_lookup.json` in-place: 12,150 NaN field values replaced with null, 4,733 `"nan"` local_names removed, 666 ancestry fallback names applied. `precompute_ranges.py` updated to produce clean JSON on future regeneration. `src/mountain_ranges.py` guards against NaN values defensively. Zero entries now have no searchable name.
-
-### Avalanche — regions not yet integrated
-- **Slovenia**: CAAMLv6 format, same as existing EAWS feeds. Date-keyed URL known; needs a stable `/latest/` path confirmed before wiring up. See comment in `src/avalanche.py`.
-- **Spanish Pyrenees (AEMET)**: HTML only, not machine-readable. For routes in the relevant Pyrenean regions (Nov–May), surface a direct link to the bulletin page instead of a data integration: https://www.aemet.es/es/eltiempo/prediccion/montana/boletin_peligro_aludes — either in the avalanche tool result or in the chat response when no machine-readable bulletin is found.
-- **AT-05/AT-06/AT-08**: wired up in `_EAWS_PROVIDERS` but feeds currently 404 (seasonal). Will activate automatically when feeds come back online.
+### Reviewer agent for multi-turn analysis
+The current reviewer only fires when `find_route` is called in a single turn. It does not cover cases where the analysis is built across multiple turns or uses only RAG sources.

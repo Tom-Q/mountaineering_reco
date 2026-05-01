@@ -238,6 +238,27 @@ with tab_chat:
                                 reply = accumulated
                                 log({"type": "assistant", "content": reply})
 
+                                if event.get("find_route_called") and accumulated.strip():
+                                    with st.spinner("Reviewing for accuracy…"):
+                                        from src.reviewer import review_route_analysis
+                                        verdict = review_route_analysis(accumulated, event["source_data"])
+                                    if verdict["verdict"] == "revise" and verdict.get("revised_output"):
+                                        revised = verdict["revised_output"]
+                                        text_placeholder.markdown(revised)
+                                        for msg in event["new_api_messages"]:
+                                            if msg["role"] == "assistant":
+                                                if isinstance(msg["content"], list):
+                                                    for blk in msg["content"]:
+                                                        if isinstance(blk, dict) and blk.get("type") == "text":
+                                                            blk["text"] = revised
+                                                else:
+                                                    msg["content"] = revised
+                                        reply = revised
+                                    if verdict.get("issues"):
+                                        with st.expander("⚠️ Reviewer notes", expanded=verdict["verdict"] == "revise"):
+                                            for issue in verdict["issues"]:
+                                                st.markdown(f"- {issue}")
+
                         render_chat_images(reply)
                     except Exception as e:
                         reply = f"Sorry, I couldn't reach the assistant ({e}). Please try again."
